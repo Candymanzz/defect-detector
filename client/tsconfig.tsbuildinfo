@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/contoureditor.tsx","./src/components/defecthighlight.tsx","./src/components/referencestep.tsx","./src/components/teststep.tsx","./src/lib/compare.ts"],"version":"5.6.3"}
