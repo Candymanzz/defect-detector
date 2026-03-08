@@ -22,12 +22,25 @@ function App() {
   const [comparing, setComparing] = useState(false)
   const [compareResult, setCompareResult] = useState<CompareResult | null>(null)
 
+  // Anomalib (Intel) — опциональный бэкенд
+  const [anomalibBackendUrl, setAnomalibBackendUrl] = useState('http://localhost:8000')
+  const [anomalibThreshold, setAnomalibThreshold] = useState(0.5)
+  const [anomalibComparing, setAnomalibComparing] = useState(false)
+  const [anomalibResult, setAnomalibResult] = useState<{
+    defect: boolean
+    score: number
+    threshold: number
+    heatmap_base64: string | null
+    message?: string
+  } | null>(null)
+
   const handleReferenceSelected = useCallback((url: string, width: number, height: number) => {
     if (referenceImageUrl) URL.revokeObjectURL(referenceImageUrl)
     setReferenceImageUrl(url)
     setReferenceImageSize({ width, height })
     setContourPoints([])
     setCompareResult(null)
+    setAnomalibResult(null)
   }, [referenceImageUrl])
 
   const handleTestImageLoad = useCallback((url: string, width?: number, height?: number) => {
@@ -35,6 +48,7 @@ function App() {
     setTestImageUrl(url)
     setTestImageSize({ width: width ?? 0, height: height ?? 0 })
     setCompareResult(null)
+    setAnomalibResult(null)
   }, [testImageUrl])
 
   const handleCompare = useCallback(() => {
@@ -77,6 +91,59 @@ function App() {
     defectThresholdMse,
     ignoreDiffThreshold,
   ])
+
+  const handleCompareAnomalib = useCallback(async () => {
+    if (!referenceImageUrl || !testImageUrl) return
+    setAnomalibComparing(true)
+    setAnomalibResult(null)
+    try {
+      const [refRes, testRes] = await Promise.all([
+        fetch(referenceImageUrl),
+        fetch(testImageUrl),
+      ])
+      if (!refRes.ok || !testRes.ok) throw new Error('Не удалось загрузить изображения')
+      const refBlob = await refRes.blob()
+      const testBlob = await testRes.blob()
+      const base = anomalibBackendUrl.replace(/\/$/, '')
+      const form = new FormData()
+      form.append('reference', refBlob, 'reference.png')
+      form.append('test', testBlob, 'test.png')
+      form.append('threshold', String(anomalibThreshold))
+      const r = await fetch(`${base}/api/anomalib/analyze`, {
+        method: 'POST',
+        body: form,
+      })
+      if (!r.ok) {
+        const t = await r.text()
+        let msg = `Ошибка ${r.status}`
+        try {
+          const errJson = JSON.parse(t)
+          if (typeof errJson.detail === 'string') msg = errJson.detail
+        } catch {
+          if (t) msg = t
+        }
+        throw new Error(msg)
+      }
+      const data = await r.json()
+      setAnomalibResult({
+        defect: data.defect,
+        score: data.score,
+        threshold: data.threshold,
+        heatmap_base64: data.heatmap_base64 ?? null,
+        message: data.message,
+      })
+    } catch (e) {
+      setAnomalibResult({
+        defect: true,
+        score: 1,
+        threshold: anomalibThreshold,
+        heatmap_base64: null,
+        message: e instanceof Error ? e.message : 'Ошибка запроса к бэкенду Anomalib',
+      })
+    } finally {
+      setAnomalibComparing(false)
+    }
+  }, [referenceImageUrl, testImageUrl, anomalibBackendUrl, anomalibThreshold])
 
   return (
     <div className="app">
@@ -135,6 +202,69 @@ function App() {
               />
               <span className="step__hint">Разница по яркости меньше этого не считается. Для белой этикетки ставьте 5–8, чтобы ловить тёмные пятна и царапины.</span>
             </div>
+
+            <div className="step step--anomalib">
+              <h3 className="step__subtitle">Режим Anomalib (Intel)</h3>
+              <p className="step__desc">
+                Сравнение через нейросеть Padim: эталон считается «нормой», тест проверяется на аномалии. Запустите сервер из папки <code>server</code>.
+              </p>
+              <label className="step__threshold-row">
+                URL бэкенда:{' '}
+                <input
+                  type="url"
+                  value={anomalibBackendUrl}
+                  onChange={(e) => setAnomalibBackendUrl(e.target.value)}
+                  placeholder="http://localhost:8000"
+                  className="step__input-url"
+                />
+              </label>
+              <label className="step__threshold-row">
+                Порог score (выше = брак): <strong>{anomalibThreshold.toFixed(2)}</strong>
+              </label>
+              <input
+                type="range"
+                min={0.1}
+                max={0.95}
+                step={0.05}
+                value={anomalibThreshold}
+                onChange={(e) => setAnomalibThreshold(Number(e.target.value))}
+              />
+              <button
+                type="button"
+                className="step__compare step__compare--anomalib"
+                onClick={handleCompareAnomalib}
+                disabled={!testImageUrl || anomalibComparing}
+              >
+                {anomalibComparing ? 'Anomalib анализирует…' : 'Сравнить через Anomalib'}
+              </button>
+            </div>
+
+            {anomalibResult && (
+              <div className="result-block result-block--anomalib">
+                <div className={`result ${anomalibResult.defect ? 'result--defect' : 'result--ok'}`}>
+                  <span className="result__label">Anomalib:</span>
+                  <span className="result__value">
+                    {anomalibResult.defect ? 'Брак' : 'Нет брака'}
+                  </span>
+                </div>
+                <p className="result-block__mse">
+                  score = {anomalibResult.score.toFixed(4)} (порог {anomalibResult.threshold})
+                </p>
+                {anomalibResult.message && (
+                  <p className="result-block__message">{anomalibResult.message}</p>
+                )}
+                {anomalibResult.heatmap_base64 && (
+                  <div className="result-block__heatmap">
+                    <p className="defect-highlight__caption">Карта аномалий (Padim)</p>
+                    <img
+                      src={`data:image/png;base64,${anomalibResult.heatmap_base64}`}
+                      alt="Heatmap"
+                      className="result-block__heatmap-img"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
 
             {compareResult && (
               <div className="result-block">

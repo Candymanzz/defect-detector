@@ -135,6 +135,41 @@
   margin-top: 0.5rem;
 }
 
+.step--threshold {
+  margin-top: 0.5rem;
+}
+
+.step--anomalib {
+  margin-top: 0.5rem;
+  border-color: #1f6feb;
+}
+
+.step__subtitle {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.step__input-url {
+  width: 100%;
+  max-width: 320px;
+  margin-left: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #e6edf3;
+  font-size: 0.9rem;
+}
+
+.step__compare--anomalib {
+  background: #1f6feb;
+}
+
+.step__compare--anomalib:hover:not(:disabled) {
+  background: #388bfd;
+}
+
 .step__threshold-row {
   display: block;
   margin-top: 1rem;
@@ -219,6 +254,25 @@
   margin: 0;
   font-size: 0.9rem;
   color: #8b949e;
+}
+
+.result-block__message {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #f85149;
+}
+
+.result-block__heatmap {
+  margin-top: 0.5rem;
+}
+
+.result-block__heatmap-img {
+  display: block;
+  max-width: 100%;
+  width: 256px;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid #30363d;
 }
 
 /* Подсветка области с браком/без брака на тестовом фото */

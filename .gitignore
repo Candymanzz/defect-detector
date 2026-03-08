@@ -1,2 +1,4 @@
 /client/node_modules
 /promts
+/server/.venv
+/server/__pycache__
