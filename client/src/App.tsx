@@ -30,6 +30,7 @@ function App() {
     defect: boolean
     score: number
     threshold: number
+    raw_score?: number | null
     heatmap_base64: string | null
     message?: string
   } | null>(null)
@@ -129,6 +130,7 @@ function App() {
         defect: data.defect,
         score: data.score,
         threshold: data.threshold,
+        raw_score: data.raw_score ?? null,
         heatmap_base64: data.heatmap_base64 ?? null,
         message: data.message,
       })
@@ -204,9 +206,9 @@ function App() {
             </div>
 
             <div className="step step--anomalib">
-              <h3 className="step__subtitle">Режим Anomalib (Intel)</h3>
+              <h3 className="step__subtitle">Режим Anomalib (Patchcore)</h3>
               <p className="step__desc">
-                Сравнение через нейросеть Padim: эталон считается «нормой», тест проверяется на аномалии. Запустите сервер из папки <code>server</code>.
+                Сравнение через нейросеть Patchcore: модель обучена на локальном датасете server/dataset/normal и ищет локальные дефекты (царапины) на тестовом фото. Запустите сервер из папки <code>server</code>.
               </p>
               <label className="step__threshold-row">
                 URL бэкенда:{' '}
@@ -248,14 +250,18 @@ function App() {
                   </span>
                 </div>
                 <p className="result-block__mse">
-                  score = {anomalibResult.score.toFixed(4)} (порог {anomalibResult.threshold})
+                  score (нормализован 0–1) = {anomalibResult.score.toFixed(4)}
+                  {anomalibResult.raw_score != null && (
+                    <> · сырой Padim = {Number(anomalibResult.raw_score).toFixed(2)}</>
+                  )}
+                  {' '}(порог {anomalibResult.threshold} → {anomalibResult.score >= anomalibResult.threshold ? 'брак' : 'норма'})
                 </p>
                 {anomalibResult.message && (
                   <p className="result-block__message">{anomalibResult.message}</p>
                 )}
                 {anomalibResult.heatmap_base64 && (
                   <div className="result-block__heatmap">
-                    <p className="defect-highlight__caption">Карта аномалий (Padim)</p>
+                    <p className="defect-highlight__caption">Карта аномалий (Patchcore)</p>
                     <img
                       src={`data:image/png;base64,${anomalibResult.heatmap_base64}`}
                       alt="Heatmap"
