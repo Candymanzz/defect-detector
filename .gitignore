@@ -2,3 +2,5 @@
 /promts
 /server/.venv
 /server/__pycache__
+/server/.tmp
+/server/results/patchcore_bucket_labels
