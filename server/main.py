@@ -38,6 +38,26 @@ from anomalib.models import Patchcore
 from anomalib.deploy import TorchInferencer, ExportType
 from anomalib.visualization import ImageVisualizer
 
+# Патч для anomalib: SyntheticAnomalyDataset при SYNTHETIC test split пишет во временную
+# директорию и в __del__ вызывает shutil.rmtree(), что на macOS может дать PermissionError.
+# Перенаправляем временные файлы в системный temp и делаем очистку в __del__ безопасной.
+import anomalib.data.utils.synthetic as _synthetic_module
+
+_synthetic_module.ROOT = str(Path(tempfile.gettempdir()) / "anomalib_synthetic")
+
+
+def _safe_synthetic_del(self):
+    if getattr(self, "_cleanup", True) and getattr(self, "root", None):
+        try:
+            import shutil
+            if self.root.exists():
+                shutil.rmtree(self.root, onerror=lambda _func, path, exc: logger.debug("rmtree skip %s: %s", path, exc))
+        except Exception as e:
+            logger.debug("Очистка временной директории SyntheticAnomalyDataset: %s", e)
+
+
+_synthetic_module.SyntheticAnomalyDataset.__del__ = _safe_synthetic_del
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -54,9 +74,15 @@ ABNORMAL_DIR = "abnormal"
 # что у нас "реальная" abnormal‑выборка, а не почти пустая.
 MIN_ABNORMAL_IMAGES = 3
 
-# Размер картинки для Patchcore: сначала ресайз до 256, потом кроп 224×224 по центру.
-IMAGE_RESIZE = 256
-IMAGE_CROP = 224
+# Размер картинки для Patchcore: сначала ресайз, потом центр-кроп.
+# Для камеры 2448×2048 используем 384×384 (вместо 224×224), чтобы царапины не терялись.
+IMAGE_RESIZE = 384
+IMAGE_CROP = 384
+
+# Patchcore: доля патчей в memory bank (0.1 = 10%). При 0.1 этикетка плохо покрыта — ложные аномалии.
+CORESET_SAMPLING_RATIO = 0.4
+# Число соседей при сравнении патча с памятью. Больше — стабильнее скор по этикетке.
+PATCHCORE_NUM_NEIGHBORS = 15
 
 # Тут будут лежать чекпоинты и экспортированные модели
 RESULTS_DIR = Path("./results/patchcore_bucket_labels").resolve()
@@ -68,6 +94,10 @@ SCORE_SOFTEN_K = 8.0
 # ImageNet mean/std (критично для Patchcore — он использует ImageNet‑претрен)
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
+
+# Верхняя часть кадра (крышка ведра + фон) на всех фото одинаковая и даёт ложные срабатывания.
+# Игнорируем при расчёте скора и при отрисовке heatmap верхние IGNORE_TOP_RATIO кадра.
+IGNORE_TOP_RATIO = 0.22
 
 
 class PatchcoreResult(BaseModel):
@@ -111,8 +141,8 @@ def _build_transforms() -> tuple[T.Compose, T.Compose]:
     Формируем train_transform и eval_transform.
 
     ВАЖНО для Patchcore:
-    - Resize(256) → CenterCrop(224): приводим все изображения к единому масштабу
-      и вырезаем центральную область; это соответствует настройкам из оригинальной статьи.
+    - Resize(IMAGE_RESIZE) → CenterCrop(IMAGE_CROP): приводим все изображения к единому масштабу
+      (384×384 для высокого разрешения камеры), чтобы мелкие царапины не терялись.
     - ToTensor() + Normalize(ImageNet): перевод в тензор и нормализация под ImageNet,
       т.к. backbone (wide_resnet50_2) претренирован на ImageNet.
 
@@ -164,7 +194,7 @@ def _create_datamodule() -> Folder:
         name="bucket_labels",
         root=str(DATASET_ROOT),
         normal_dir=NORMAL_DIR,
-        abnormal_dir=ABNORMAL_DIR if abnormal_dir_path.exists() else None,
+        abnormal_dir=ABNORMAL_DIR if has_abnormal else None,
         normal_split_ratio=0.0,       # 0% нормальных в test — все идут в train/val
         test_split_mode=test_split_mode,
         val_split_mode=ValSplitMode.FROM_TRAIN,
@@ -195,13 +225,17 @@ def _train_patchcore() -> Path:
     logger.info("Старт обучения Patchcore на датасете %s", DATASET_ROOT)
     datamodule = _create_datamodule()
 
-    # Patchcore с wide_resnet50_2 и включённым tiling (если царапины мельче общей картинки,
-    # плитка помогает рассматривать отдельные области в более высоком разрешении).
+    # Patchcore с wide_resnet50_2; pre_processor 384×384 для высокого разрешения камеры.
+    patchcore_pre_processor = Patchcore.configure_pre_processor(
+        image_size=(IMAGE_RESIZE, IMAGE_RESIZE),
+        center_crop_size=(IMAGE_CROP, IMAGE_CROP),
+    )
     model = Patchcore(
         backbone="wide_resnet50_2",
         layers=["layer2", "layer3"],
-        coreset_sampling_ratio=0.1,
-        num_neighbors=9,
+        coreset_sampling_ratio=CORESET_SAMPLING_RATIO,
+        num_neighbors=PATCHCORE_NUM_NEIGHBORS,
+        pre_processor=patchcore_pre_processor,
     )
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -276,11 +310,8 @@ def _overlay_heatmap_base64(image: np.ndarray, anomaly_map: np.ndarray | None) -
     """
     Накладываем карту аномалий поверх исходного изображения и возвращаем PNG в base64.
 
-    В Anomalib v1.1.3 класс ImageVisualizer не предоставляет стабильного API
-    для прямого вызова из кода, поэтому делаем оверлей вручную:
-    - нормализуем anomaly_map в [0,1],
-    - перекодируем её в цветовую карту (jet),
-    - смешиваем с исходным изображением с заданной прозрачностью.
+    Верхние IGNORE_TOP_RATIO кадра (крышка/фон) на heatmap отображаются как «холодные»,
+    т.к. не участвуют в решении о браке.
     """
     if anomaly_map is None:
         return None
@@ -327,6 +358,12 @@ def _overlay_heatmap_base64(image: np.ndarray, anomaly_map: np.ndarray | None) -
         anomaly_arr = np.array(
             Image.fromarray(anomaly_arr.astype("float32")).resize((w, h))
         )
+
+    # Верх кадра не учитываем (крышка/фон) — на heatmap показываем как холодную зону
+    top_ignore = int(h * IGNORE_TOP_RATIO)
+    if top_ignore > 0:
+        anomaly_arr = anomaly_arr.copy()
+        anomaly_arr[:top_ignore, :] = np.min(anomaly_arr)
 
     # Нормализация в [0,1]
     if anomaly_arr.max() > anomaly_arr.min():
@@ -472,13 +509,16 @@ async def analyze_patchcore(
         # pred_score в этой версии TorchInferencer всегда 1.0 и не различает кадры.
         # Поэтому считаем сырой скор по СРЕДНЕМУ значению карты аномалий (mean),
         # чтобы разные фото (с разной площадью «горячих» областей) давали разный score.
+        # Верх кадра (крышка/фон) не учитываем — только зона с этикеткой.
         import torch as _torch
         raw = 0.0
         if anomaly_map is not None:
             am = anomaly_map.detach().cpu().numpy() if hasattr(anomaly_map, "detach") else np.asarray(anomaly_map)
             am = am.squeeze()
             if am.size:
-                am_mean = float(np.mean(am))
+                top_ignore = int(am.shape[0] * IGNORE_TOP_RATIO)
+                roi = am[top_ignore:, :] if top_ignore > 0 else am
+                am_mean = float(np.mean(roi)) if roi.size else 0.0
                 # масштабируем в диапазон ~[0, 10], чтобы 1 - exp(-raw/8) давал разброс 0..~0.7
                 raw = am_mean * 10.0
         if raw <= 0.0:

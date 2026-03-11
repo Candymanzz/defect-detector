@@ -221,16 +221,20 @@ function App() {
                 />
               </label>
               <label className="step__threshold-row">
-                Порог score (выше = брак): <strong>{anomalibThreshold.toFixed(2)}</strong>
+                Порог score (0–1):{' '}
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={anomalibThreshold}
+                  onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setAnomalibThreshold(Number.isNaN(v) ? 0 : Math.max(0, Math.min(1, v)));
+                }}
+                  className="step__input-number"
+                />
               </label>
-              <input
-                type="range"
-                min={0.1}
-                max={0.95}
-                step={0.05}
-                value={anomalibThreshold}
-                onChange={(e) => setAnomalibThreshold(Number(e.target.value))}
-              />
               <button
                 type="button"
                 className="step__compare step__compare--anomalib"
