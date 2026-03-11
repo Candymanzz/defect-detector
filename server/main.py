@@ -30,6 +30,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from pydantic import BaseModel
 from torchvision import transforms as T
+from torchvision.transforms import v2 as Tv2
+from torchvision.transforms import functional as TF
 
 from anomalib.data import Folder
 from anomalib.data.utils import TestSplitMode, ValSplitMode
@@ -37,6 +39,17 @@ from anomalib.engine import Engine
 from anomalib.models import Patchcore
 from anomalib.deploy import TorchInferencer, ExportType
 from anomalib.visualization import ImageVisualizer
+
+# PyTorch 2.6+ по умолчанию загружает чекпоинты с weights_only=True; в чекпоинте Anomalib
+# есть PreProcessor — добавляем в разрешённые глобалы, чтобы Engine.predict() мог загрузить .ckpt.
+import torch
+try:
+    from anomalib.pre_processing.pre_processor import PreProcessor
+    torch.serialization.add_safe_globals([PreProcessor])
+except Exception:  # на старых версиях PyTorch/Anomalib может не быть add_safe_globals
+    pass
+# Разрешаем загрузку чекпоинтов с произвольными классами (Anomalib/Lightning) — только для своих обученных моделей.
+os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
 
 # Патч для anomalib: SyntheticAnomalyDataset при SYNTHETIC test split пишет во временную
 # директорию и в __del__ вызывает shutil.rmtree(), что на macOS может дать PermissionError.
@@ -58,6 +71,17 @@ def _safe_synthetic_del(self):
 
 _synthetic_module.SyntheticAnomalyDataset.__del__ = _safe_synthetic_del
 
+
+class _EnsureTensor:
+    """Преобразует PIL/ndarray в тензор; тензор возвращает без изменений (для augmentations в Anomalib)."""
+
+    def __call__(self, x):
+        import torch
+        if isinstance(x, torch.Tensor):
+            return x
+        return TF.to_tensor(x)
+
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -76,11 +100,15 @@ MIN_ABNORMAL_IMAGES = 3
 
 # Размер картинки для Patchcore: сначала ресайз, потом центр-кроп.
 # Для камеры 2448×2048 используем 384×384 (вместо 224×224), чтобы царапины не терялись.
-IMAGE_RESIZE = 384
-IMAGE_CROP = 384
+# Если текст/графика на этикетке помечаются как аномалия — увеличьте до 512 или 640,
+# чтобы модель лучше запоминала детали нормальных этикеток (нужно переобучить).
+IMAGE_RESIZE = 512
+IMAGE_CROP = 512
 
-# Patchcore: доля патчей в memory bank (0.1 = 10%). При 0.1 этикетка плохо покрыта — ложные аномалии.
-CORESET_SAMPLING_RATIO = 0.4
+# Patchcore: доля патчей в memory bank. При малой доле (0.1) этикетка плохо покрыта — ложные аномалии.
+# При 100 почти одинаковых фото с небольшим смещением ведра — увеличиваем до 0.6,
+# чтобы больше патчей (в т.ч. над текстом/иконками) попало в память и score по normal был ниже.
+CORESET_SAMPLING_RATIO = 0.6
 # Число соседей при сравнении патча с памятью. Больше — стабильнее скор по этикетке.
 PATCHCORE_NUM_NEIGHBORS = 15
 
@@ -136,27 +164,36 @@ def _count_abnormal_images() -> int:
     return sum(1 for p in dir_path.iterdir() if p.is_file())
 
 
-def _build_transforms() -> tuple[T.Compose, T.Compose]:
+def _build_transforms() -> tuple[Tv2.Compose, Tv2.Compose]:
     """
     Формируем train_transform и eval_transform.
 
     ВАЖНО для Patchcore:
-    - Resize(IMAGE_RESIZE) → CenterCrop(IMAGE_CROP): приводим все изображения к единому масштабу
-      (384×384 для высокого разрешения камеры), чтобы мелкие царапины не терялись.
-    - ToTensor() + Normalize(ImageNet): перевод в тензор и нормализация под ImageNet,
-      т.к. backbone (wide_resnet50_2) претренирован на ImageNet.
-
-    Эти шаги значительно повышают устойчивость и точность Patchcore: модель
-    видит данные в том же пространстве признаков, на котором была обучена.
+    - Resize + Crop + Normalize(ImageNet).
+    - При обучении: Resize чуть больше 512, затем RandomCrop(512) — модель видит этикетку
+      в разных положениях (как при разном положении ведра), score по normal снижается.
+    - При eval/инференсе: CenterCrop(512) без сдвига, как сейчас.
     """
-    common = [
-        T.Resize(IMAGE_RESIZE),
-        T.CenterCrop(IMAGE_CROP),
-        T.ToTensor(),
-        T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+    # Eval: фиксированный центр, как при инференсе
+    eval_pipeline = [
+        _EnsureTensor(),
+        Tv2.Resize((IMAGE_RESIZE, IMAGE_CROP)),
+        Tv2.CenterCrop(IMAGE_CROP),
+        Tv2.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
     ]
-    train_transform = T.Compose(common)
-    eval_transform = T.Compose(common)
+    eval_transform = Tv2.Compose(eval_pipeline)
+
+    # Train: небольшой случайный сдвиг (Resize больше, потом RandomCrop 512)
+    # чтобы при «чуть разном положении ведра» те же участки этикетки не считались аномалией
+    TRAIN_OVER_SIZE = 544  # после Resize(544) RandomCrop(512) даёт случайное смещение до ±16 пикселей
+    train_pipeline = [
+        _EnsureTensor(),
+        Tv2.Resize((TRAIN_OVER_SIZE, TRAIN_OVER_SIZE)),
+        Tv2.RandomCrop(IMAGE_CROP),
+        Tv2.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+    ]
+    train_transform = Tv2.Compose(train_pipeline)
+
     return train_transform, eval_transform
 
 
@@ -188,6 +225,9 @@ def _create_datamodule() -> Folder:
         TestSplitMode.FROM_DIR if has_abnormal else TestSplitMode.SYNTHETIC
     )
 
+    # Критично: передаём те же Resize(512)+CenterCrop(512)+Normalize, что и в pre_processor модели.
+    # Иначе при обучении Engine подставит дефолт 256→224, при инференсе — 512×512,
+    # и одни и те же фото из normal будут давать разные признаки → ложная аномалия (1 из 100).
     train_transform, eval_transform = _build_transforms()
 
     datamodule = Folder(
@@ -195,6 +235,9 @@ def _create_datamodule() -> Folder:
         root=str(DATASET_ROOT),
         normal_dir=NORMAL_DIR,
         abnormal_dir=ABNORMAL_DIR if has_abnormal else None,
+        train_augmentations=train_transform,
+        val_augmentations=eval_transform,
+        test_augmentations=eval_transform,
         normal_split_ratio=0.0,       # 0% нормальных в test — все идут в train/val
         test_split_mode=test_split_mode,
         val_split_mode=ValSplitMode.FROM_TRAIN,
@@ -256,6 +299,8 @@ def _train_patchcore() -> Path:
     best_model_path = Path(engine.best_model_path)
     if best_model_path.exists():
         logger.info("Лучший Lightning‑чекпоинт: %s", best_model_path)
+        # Сохраняем путь для инференса через Engine.predict (экспорт .pt даёт постоянную anomaly_map).
+        (RESULTS_DIR / "latest_lightning_ckpt.txt").write_text(str(best_model_path), encoding="utf-8")
     else:
         logger.warning("Лучший Lightning‑чекпоинт не найден: %s", best_model_path)
 
@@ -286,6 +331,94 @@ def _find_latest_torch_model() -> Path | None:
         return None
     models.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return models[0]
+
+
+def _find_latest_lightning_ckpt() -> Path | None:
+    """Путь к последнему Lightning‑чекпоинту (.ckpt) для Engine.predict (нормальная anomaly_map)."""
+    path_file = RESULTS_DIR / "latest_lightning_ckpt.txt"
+    if path_file.exists():
+        p = Path(path_file.read_text(encoding="utf-8").strip())
+        if p.exists():
+            return p
+    if not RESULTS_DIR.exists():
+        return None
+    ckpts = list(RESULTS_DIR.rglob("*.ckpt"))
+    if not ckpts:
+        return None
+    ckpts.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return ckpts[0]
+
+
+def _build_patchcore_model() -> Patchcore:
+    """Создаёт экземпляр Patchcore с теми же параметрами, что и при обучении (для загрузки чекпоинта)."""
+    patchcore_pre_processor = Patchcore.configure_pre_processor(
+        image_size=(IMAGE_RESIZE, IMAGE_RESIZE),
+        center_crop_size=(IMAGE_CROP, IMAGE_CROP),
+    )
+    return Patchcore(
+        backbone="wide_resnet50_2",
+        layers=["layer2", "layer3"],
+        coreset_sampling_ratio=CORESET_SAMPLING_RATIO,
+        num_neighbors=PATCHCORE_NUM_NEIGHBORS,
+        pre_processor=patchcore_pre_processor,
+    )
+
+
+def _predict_with_ckpt_direct(ckpt_path: Path, image_path: Path):
+    """
+    Инференс по Lightning‑чекпоинту вручную: загрузка state_dict и predict_step.
+    Возвращает объект с .anomaly_map, .pred_score, .image (как от TorchInferencer),
+    чтобы не зависеть от постобработки Engine.predict (из‑за неё anomaly_map была постоянной).
+    """
+    import torch as _torch
+    _, eval_transform = _build_transforms()
+    img_pil = Image.open(image_path)
+    if img_pil.mode != "RGB":
+        img_pil = img_pil.convert("RGB")
+    tensor = eval_transform(img_pil)  # (C, H, W)
+    if tensor.dim() == 3:
+        tensor = tensor.unsqueeze(0)  # (1, C, H, W)
+
+    ckpt = _torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
+    model = _build_patchcore_model()
+    model.load_state_dict(ckpt["state_dict"], strict=False)
+    model.eval()
+
+    # forward() применяет post_processor и даёт постоянные 1.0; model.model(tensor) — сырые скоры.
+    with _torch.no_grad():
+        out = model.model(tensor)
+
+    if out is None:
+        raise ValueError("model.model вернул None")
+
+    # Логируем вывод (сырые значения, не нормализованные в [0,1])
+    logger.info("model.model() вернул type=%s", type(out).__name__)
+    anomaly_map = getattr(out, "anomaly_map", None)
+    if anomaly_map is None and isinstance(out, dict):
+        anomaly_map = out.get("anomaly_map")
+    pred_score = getattr(out, "pred_score", None)
+    if pred_score is None and isinstance(out, dict):
+        pred_score = out.get("pred_score")
+    if anomaly_map is not None:
+        am = anomaly_map.detach().cpu().numpy() if hasattr(anomaly_map, "detach") else np.asarray(anomaly_map)
+        logger.info("direct anomaly_map shape=%s min=%.4f max=%.4f mean=%.4f std=%.4f",
+                   getattr(anomaly_map, "shape", am.shape), float(np.min(am)), float(np.max(am)),
+                   float(np.mean(am)), float(np.std(am)))
+    if pred_score is not None:
+        ps = pred_score.detach().cpu().numpy() if hasattr(pred_score, "detach") else np.asarray(pred_score)
+        logger.info("direct pred_score=%s (shape=%s)", ps, getattr(ps, "shape", None))
+    # Картинка для визуализации: denorm препроцессированного тензора
+    img_vis = tensor[0].cpu().numpy().transpose(1, 2, 0)
+    img_vis = np.clip(img_vis * np.array(IMAGENET_STD) + np.array(IMAGENET_MEAN), 0, 1)
+    img_vis = (img_vis * 255).astype(np.uint8)
+
+    class _Pred:
+        pass
+    p = _Pred()
+    p.anomaly_map = anomaly_map
+    p.pred_score = pred_score
+    p.image = img_vis
+    return p
 
 
 def ensure_trained_model() -> Path:
@@ -368,16 +501,18 @@ def _overlay_heatmap_base64(image: np.ndarray, anomaly_map: np.ndarray | None) -
     # Нормализация в [0,1]
     if anomaly_arr.max() > anomaly_arr.min():
         anomaly_norm = (anomaly_arr - anomaly_arr.min()) / (anomaly_arr.max() - anomaly_arr.min())
+        map_has_variation = True
     else:
         anomaly_norm = np.zeros_like(anomaly_arr)
+        map_has_variation = False
 
     # Получаем цветную heatmap через colormap (jet)
     cmap = cm.get_cmap("jet")
     heatmap_rgba = cmap(anomaly_norm)  # (H,W,4) в [0,1]
     heatmap_rgb = (heatmap_rgba[..., :3] * 255).astype("uint8")
 
-    # Смешиваем изображения (alpha — насколько ярко хотим видеть карту аномалий)
-    alpha = 0.5
+    # Если карта без вариации — не заливаем всё одним цветом (фиолетовый слой), делаем оверлей почти прозрачным
+    alpha = 0.5 if map_has_variation else 0.08
     overlay = ((1 - alpha) * base.astype("float32") + alpha * heatmap_rgb.astype("float32")).astype("uint8")
 
     pil_img = Image.fromarray(overlay)
@@ -456,42 +591,75 @@ async def analyze_patchcore(
 
     # Загружаем/обучаем модель по необходимости
     try:
-        ckpt_path = ensure_trained_model()
+        ensure_trained_model()  # гарантируем, что есть хотя бы .pt или только что обучили
     except Exception as e:
         logger.exception("Не удалось подготовить обученную модель Patchcore")
         raise HTTPException(status_code=500, detail=f"Ошибка подготовки модели Patchcore: {e!s}")
 
-    # TorchInferencer: загружаем PyTorch‑модель
-    try:
-        # TorchInferencer по умолчанию блокирует загрузку моделей, требующих pickle
-        # (защита от вредоносных чекпоинтов). Для ЛОКАЛЬНО обученной модели это безопасно,
-        # поэтому явно разрешаем выполнение кода при загрузке.
-        os.environ.setdefault("TRUST_REMOTE_CODE", "1")
-        inferencer = TorchInferencer(path=str(ckpt_path))
-    except Exception as e:
-        logger.exception("Ошибка инициализации TorchInferencer")
-        raise HTTPException(status_code=500, detail=f"Ошибка загрузки модели Patchcore: {e!s}")
-
-    # Сохраняем тестовое изображение во временный файл для удобства
+    # Сохраняем тестовое изображение во временный файл
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
         tmp.write(test_bytes)
         tmp_path = Path(tmp.name)
 
-    try:
-        predictions = inferencer.predict(image=str(tmp_path))
-    except Exception as e:
-        logger.exception("Ошибка инференса Patchcore")
-        raise HTTPException(status_code=500, detail=f"Ошибка инференса Patchcore: {e!s}")
-    finally:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+    # Предпочитаем инференс по Lightning‑чекпоинту: сначала прямой predict_step (сырая anomaly_map),
+    # иначе Engine.predict (у него в текущей версии anomaly_map часто постоянна) или TorchInferencer.
+    lightning_ckpt = _find_latest_lightning_ckpt()
+    predictions = None
+    used_engine_predict = False
 
-    # В Anomalib v1.1.3 TorchInferencer.predict может вернуть либо ImageBatch
-    # с атрибутами image, pred_score, pred_label, anomaly_map, либо dict.
-    # pred_label уже использует адаптивный порог F1AdaptiveThreshold.
+    if lightning_ckpt is not None:
+        try:
+            predictions = _predict_with_ckpt_direct(lightning_ckpt, tmp_path)
+            used_engine_predict = True
+            logger.info("Инференс через прямой predict_step (Lightning‑чекпоинт)")
+        except Exception as e:
+            logger.warning("Прямой predict_step не удался, пробуем Engine.predict: %s", e)
+            if lightning_ckpt is not None:
+                try:
+                    model = _build_patchcore_model()
+                    engine = Engine(accelerator="auto", devices=1)
+                    pred_output = engine.predict(
+                        model=model,
+                        ckpt_path=str(lightning_ckpt),
+                        data_path=str(tmp_path),
+                        return_predictions=True,
+                    )
+                    if pred_output:
+                        out = pred_output[0] if isinstance(pred_output, (list, tuple)) else pred_output
+                        if isinstance(out, (list, tuple)) and len(out):
+                            out = out[0]
+                        predictions = out
+                        used_engine_predict = predictions is not None
+                    if used_engine_predict:
+                        logger.info("Инференс через Engine.predict (Lightning‑чекпоинт)")
+                except Exception as e2:
+                    logger.warning("Engine.predict не удался: %s", e2)
+
+    if not used_engine_predict:
+        try:
+            os.environ.setdefault("TRUST_REMOTE_CODE", "1")
+            ckpt_path = ensure_trained_model()
+            inferencer = TorchInferencer(path=str(ckpt_path))
+            predictions = inferencer.predict(image=str(tmp_path))
+        except Exception as e:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            logger.exception("Ошибка инференса Patchcore")
+            raise HTTPException(status_code=500, detail=f"Ошибка инференса Patchcore: {e!s}")
+
     try:
+        tmp_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    # Разбор предсказания (общий для Engine.predict и TorchInferencer)
+    # с атрибутами image, pred_score, pred_label, anomaly_map, либо dict.
+    try:
+        logger.info("predictions type=%s", type(predictions).__name__)
+        if isinstance(predictions, dict):
+            logger.info("predictions keys=%s", list(predictions.keys()))
         # Извлекаем изображение
         if hasattr(predictions, "image"):
             image_np = predictions.image  # (H,W,C)
@@ -506,12 +674,24 @@ async def analyze_patchcore(
         else:
             anomaly_map = None
 
-        # pred_score в этой версии TorchInferencer всегда 1.0 и не различает кадры.
-        # Поэтому считаем сырой скор по СРЕДНЕМУ значению карты аномалий (mean),
-        # чтобы разные фото (с разной площадью «горячих» областей) давали разный score.
-        # Верх кадра (крышка/фон) не учитываем — только зона с этикеткой.
+        # Логируем форму и статистику карты (если везде один score и фиолетовый слой — карта скорее всего постоянна)
+        if anomaly_map is not None:
+            am_debug = anomaly_map.detach().cpu().numpy() if hasattr(anomaly_map, "detach") else np.asarray(anomaly_map)
+            am_flat = am_debug.flatten()
+            logger.info(
+                "anomaly_map shape=%s min=%.4f max=%.4f mean=%.4f std=%.4f",
+                am_debug.shape,
+                float(np.min(am_flat)),
+                float(np.max(am_flat)),
+                float(np.mean(am_flat)),
+                float(np.std(am_flat)),
+            )
+
+        # Сырые скоры от model.model() в диапазоне ~50–100; нормализованные (Engine/.pt) — в [0,1].
+        # Масштабируем так: если mean/score > 2 — сырой масштаб, делим на 10; иначе умножаем на 10.
         import torch as _torch
         raw = 0.0
+        raw_source = "anomaly_map mean"
         if anomaly_map is not None:
             am = anomaly_map.detach().cpu().numpy() if hasattr(anomaly_map, "detach") else np.asarray(anomaly_map)
             am = am.squeeze()
@@ -519,9 +699,32 @@ async def analyze_patchcore(
                 top_ignore = int(am.shape[0] * IGNORE_TOP_RATIO)
                 roi = am[top_ignore:, :] if top_ignore > 0 else am
                 am_mean = float(np.mean(roi)) if roi.size else 0.0
-                # масштабируем в диапазон ~[0, 10], чтобы 1 - exp(-raw/8) давал разброс 0..~0.7
-                raw = am_mean * 10.0
+                am_std = float(np.std(roi)) if roi.size else 0.0
+                raw = (am_mean / 10.0) if am_mean > 2.0 else (am_mean * 10.0)
+                if am_std < 1e-5 and hasattr(predictions, "pred_score"):
+                    score_val = predictions.pred_score
+                    if isinstance(score_val, _torch.Tensor):
+                        t = score_val.detach().cpu()
+                        if t.numel():
+                            ps_val = float(t.flatten()[0].item())
+                            raw = (ps_val / 10.0) if ps_val > 2.0 else (ps_val * 10.0)
+                            raw_source = "pred_score"
+                            logger.info("anomaly_map постоянна (std<1e-5), pred_score=%.4f -> raw=%.4f", ps_val, raw)
+                elif am_std < 1e-5 and isinstance(predictions, dict) and predictions.get("pred_score") is not None:
+                    score_val = predictions["pred_score"]
+                    if isinstance(score_val, _torch.Tensor):
+                        t = score_val.detach().cpu()
+                        if t.numel():
+                            ps_val = float(t.flatten()[0].item())
+                            raw = (ps_val / 10.0) if ps_val > 2.0 else (ps_val * 10.0)
+                            raw_source = "pred_score"
+                            logger.info("anomaly_map постоянна, pred_score=%.4f -> raw=%.4f", ps_val, raw)
+                    else:
+                        ps_val = float(score_val) if score_val is not None else 0.0
+                        raw = (ps_val / 10.0) if ps_val > 2.0 else (ps_val * 10.0)
+                        raw_source = "pred_score"
         if raw <= 0.0:
+            raw_source = "pred_score (fallback)"
             # запасной вариант, если карты нет
             if hasattr(predictions, "pred_score"):
                 score_val = predictions.pred_score
@@ -533,17 +736,18 @@ async def analyze_patchcore(
                 t = score_val.detach().cpu()
                 raw = float(t.flatten()[0].item()) if t.numel() else 0.0
             else:
-                raw = float(score_val)
-        logger.info("Patchcore raw_score=%.4f (из anomaly_map mean)", raw)
+                raw = float(score_val) if score_val is not None else 0.0
+        logger.info("Patchcore raw_score=%.4f (из %s)", raw, raw_source)
 
         # Мягкая нормализация
         score = 1.0 - math.exp(-raw / SCORE_SOFTEN_K)
         score = max(0.0, min(1.0, score))
+        logger.info("score нормализованный=%.4f (порог=%.2f -> defect=%s)", score, threshold, score >= threshold)
 
         # Решение о браке по нормализованному score и порогу из UI
         defect = score >= threshold
     except Exception as e:
-        logger.exception("Не удалось разобрать вывод TorchInferencer")
+        logger.exception("Не удалось разобрать вывод модели")
         raise HTTPException(status_code=500, detail=f"Неверный формат предсказания: {e!s}")
 
     # Приводим картинку к uint8 (если нужно) и строим heatmap через ImageVisualizer.
