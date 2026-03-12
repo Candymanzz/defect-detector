@@ -13,6 +13,8 @@ HTTP‑сервис для обнаружения и локализации де
   работает уже с PyTorch‑моделью (а не с Lightning‑чекпоинтом).
 """
 
+# curl "http://localhost:8000/api/patchcore/calibrate?limit_per_class=5"
+
 from __future__ import annotations
 
 import base64
@@ -106,9 +108,9 @@ IMAGE_RESIZE = 512
 IMAGE_CROP = 512
 
 # Patchcore: доля патчей в memory bank. При малой доле (0.1) этикетка плохо покрыта — ложные аномалии.
-# При 100 почти одинаковых фото с небольшим смещением ведра — увеличиваем до 0.6,
-# чтобы больше патчей (в т.ч. над текстом/иконками) попало в память и score по normal был ниже.
-CORESET_SAMPLING_RATIO = 0.6
+# Если текст/картинки на этикетке горят как аномалия — увеличьте до 0.5–0.6, чтобы больше
+# «нормальных» патчей (в т.ч. над текстом и графикой) попало в память.
+CORESET_SAMPLING_RATIO = 0.5
 # Число соседей при сравнении патча с памятью. Больше — стабильнее скор по этикетке.
 PATCHCORE_NUM_NEIGHBORS = 15
 
@@ -123,19 +125,37 @@ SCORE_SOFTEN_K = 8.0
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
-# Верхняя часть кадра (крышка ведра + фон) на всех фото одинаковая и даёт ложные срабатывания.
-# Игнорируем при расчёте скора и при отрисовке heatmap верхние IGNORE_TOP_RATIO кадра.
-IGNORE_TOP_RATIO = 0.22
-
 
 class PatchcoreResult(BaseModel):
-    """Формат ответа, совместимый с текущим фронтендом."""
+    """Формат ответа для одиночного изображения (совместим с текущим фронтендом)."""
+
     defect: bool
     score: float
     threshold: float
     heatmap_base64: str | None = None
     message: str | None = None
     raw_score: float | None = None
+
+
+class CalibrationSample(BaseModel):
+    """Один пример из normal/abnormal с рассчитанным score."""
+
+    path: str          # относительный путь внутри dataset
+    kind: str          # "normal" или "abnormal"
+    score: float
+    raw_score: float
+
+
+class CalibrationResult(BaseModel):
+    """Результаты калибровки порога по всем картинкам из normal/abnormal."""
+
+    normal_count: int
+    abnormal_count: int
+    normal_stats: dict | None
+    abnormal_stats: dict | None
+    suggested_t_low: float | None
+    suggested_t_high: float | None
+    samples: list[CalibrationSample]
 
 
 app = FastAPI(
@@ -169,31 +189,20 @@ def _build_transforms() -> tuple[Tv2.Compose, Tv2.Compose]:
     Формируем train_transform и eval_transform.
 
     ВАЖНО для Patchcore:
-    - Resize + Crop + Normalize(ImageNet).
-    - При обучении: Resize чуть больше 512, затем RandomCrop(512) — модель видит этикетку
-      в разных положениях (как при разном положении ведра), score по normal снижается.
-    - При eval/инференсе: CenterCrop(512) без сдвига, как сейчас.
+    - Resize(IMAGE_RESIZE) → CenterCrop(IMAGE_CROP): приводим все изображения к единому масштабу.
+    - Normalize(ImageNet): нормализация под ImageNet (backbone wide_resnet50_2 претренирован на нём).
+
+    Используем transforms.v2 для Resize/CenterCrop/Normalize (работают с тензором).
+    _EnsureTensor: если Anomalib передаёт уже тензор — пропускаем; иначе PIL/ndarray → тензор.
     """
-    # Eval: фиксированный центр, как при инференсе
-    eval_pipeline = [
+    common = [
         _EnsureTensor(),
         Tv2.Resize((IMAGE_RESIZE, IMAGE_CROP)),
         Tv2.CenterCrop(IMAGE_CROP),
         Tv2.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
     ]
-    eval_transform = Tv2.Compose(eval_pipeline)
-
-    # Train: небольшой случайный сдвиг (Resize больше, потом RandomCrop 512)
-    # чтобы при «чуть разном положении ведра» те же участки этикетки не считались аномалией
-    TRAIN_OVER_SIZE = 544  # после Resize(544) RandomCrop(512) даёт случайное смещение до ±16 пикселей
-    train_pipeline = [
-        _EnsureTensor(),
-        Tv2.Resize((TRAIN_OVER_SIZE, TRAIN_OVER_SIZE)),
-        Tv2.RandomCrop(IMAGE_CROP),
-        Tv2.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-    ]
-    train_transform = Tv2.Compose(train_pipeline)
-
+    train_transform = Tv2.Compose(common)
+    eval_transform = Tv2.Compose(common)
     return train_transform, eval_transform
 
 
@@ -442,9 +451,6 @@ def ensure_trained_model() -> Path:
 def _overlay_heatmap_base64(image: np.ndarray, anomaly_map: np.ndarray | None) -> str | None:
     """
     Накладываем карту аномалий поверх исходного изображения и возвращаем PNG в base64.
-
-    Верхние IGNORE_TOP_RATIO кадра (крышка/фон) на heatmap отображаются как «холодные»,
-    т.к. не участвуют в решении о браке.
     """
     if anomaly_map is None:
         return None
@@ -491,12 +497,6 @@ def _overlay_heatmap_base64(image: np.ndarray, anomaly_map: np.ndarray | None) -
         anomaly_arr = np.array(
             Image.fromarray(anomaly_arr.astype("float32")).resize((w, h))
         )
-
-    # Верх кадра не учитываем (крышка/фон) — на heatmap показываем как холодную зону
-    top_ignore = int(h * IGNORE_TOP_RATIO)
-    if top_ignore > 0:
-        anomaly_arr = anomaly_arr.copy()
-        anomaly_arr[:top_ignore, :] = np.min(anomaly_arr)
 
     # Нормализация в [0,1]
     if anomaly_arr.max() > anomaly_arr.min():
@@ -696,8 +696,7 @@ async def analyze_patchcore(
             am = anomaly_map.detach().cpu().numpy() if hasattr(anomaly_map, "detach") else np.asarray(anomaly_map)
             am = am.squeeze()
             if am.size:
-                top_ignore = int(am.shape[0] * IGNORE_TOP_RATIO)
-                roi = am[top_ignore:, :] if top_ignore > 0 else am
+                roi = am
                 am_mean = float(np.mean(roi)) if roi.size else 0.0
                 am_std = float(np.std(roi)) if roi.size else 0.0
                 raw = (am_mean / 10.0) if am_mean > 2.0 else (am_mean * 10.0)
@@ -771,6 +770,143 @@ async def analyze_patchcore(
         heatmap_base64=heatmap_b64,
         message=None,
         raw_score=round(raw, 4),
+    )
+
+
+# ----------------------------
+# Калибровка порога по normal/abnormal
+# ----------------------------
+
+
+def _iter_dataset_images(kind: str):
+    """Итерируем все картинки в dataset/normal или dataset/abnormal."""
+
+    exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+    base_dir = DATASET_ROOT / (NORMAL_DIR if kind == "normal" else ABNORMAL_DIR)
+    if not base_dir.exists():
+        return
+
+    for path in sorted(base_dir.rglob("*")):
+        if path.is_file() and path.suffix.lower() in exts:
+            # Возвращаем относительный путь внутри dataset для удобства
+            rel = path.relative_to(DATASET_ROOT)
+            yield kind, path, rel.as_posix()
+
+
+def _compute_raw_and_score_from_anomaly_map(anomaly_map: np.ndarray | None) -> tuple[float, float]:
+    """Упрощённый пересчёт raw/score только по anomaly_map (без pred_score)."""
+
+    if anomaly_map is None:
+        return 0.0, 0.0
+
+    arr = anomaly_map.detach().cpu().numpy() if hasattr(anomaly_map, "detach") else np.asarray(anomaly_map)
+    arr = arr.squeeze()
+    if not arr.size:
+        return 0.0, 0.0
+
+    mean_val = float(np.mean(arr))
+    # Сырые значения от model.model() для Patchcore лежат в районе 50–100.
+    # Нормализованные (после Engine/TorchInferencer) — в [0,1].
+    # Если mean_val > 2, считаем, что это сырой масштаб и делим на 10.
+    raw = (mean_val / 10.0) if mean_val > 2.0 else (mean_val * 10.0)
+    score = 1.0 - math.exp(-raw / SCORE_SOFTEN_K)
+    score = max(0.0, min(1.0, score))
+    return raw, score
+
+
+@app.get("/api/patchcore/calibrate", response_model=CalibrationResult)
+def calibrate_patchcore(limit_per_class: int = 0):
+    """
+    Пройтись по всем изображениям в dataset/normal и dataset/abnormal,
+    посчитать raw/score и предложить пороги T_low, T_high:
+
+    - T_low — верхняя граница «точно не брак» (max score по normal)
+    - T_high — нижняя граница «точно брак» (min score по abnormal)
+    Если распределения пересекаются, T_low/T_high считаются по перцентилям (90% normal, 10% abnormal).
+    """
+
+    try:
+        ensure_trained_model()
+    except Exception as e:
+        logger.exception("Не удалось подготовить модель для калибровки")
+        raise HTTPException(status_code=500, detail=f"Ошибка подготовки модели Patchcore: {e!s}")
+
+    lightning_ckpt = _find_latest_lightning_ckpt()
+    if lightning_ckpt is None:
+        raise HTTPException(status_code=500, detail="Не найден Lightning‑чекпоинт Patchcore для калибровки")
+
+    samples: list[CalibrationSample] = []
+    normal_scores: list[float] = []
+    abnormal_scores: list[float] = []
+
+    for kind in ("normal", "abnormal"):
+        count = 0
+        for kind_, path, rel in _iter_dataset_images(kind):
+            if limit_per_class and count >= limit_per_class:
+                break
+            count += 1
+
+            try:
+                pred = _predict_with_ckpt_direct(lightning_ckpt, path)
+                raw, score = _compute_raw_and_score_from_anomaly_map(pred.anomaly_map)
+            except Exception as e:
+                logger.warning("Калибровка: не удалось обработать %s (%s): %s", kind_, rel, e)
+                continue
+
+            samples.append(
+                CalibrationSample(
+                    path=rel,
+                    kind=kind_,
+                    score=round(score, 4),
+                    raw_score=round(raw, 4),
+                )
+            )
+            if kind_ == "normal":
+                normal_scores.append(score)
+            else:
+                abnormal_scores.append(score)
+
+    def _stats(values: list[float]) -> dict | None:
+        if not values:
+            return None
+        arr = np.asarray(values, dtype=float)
+        return {
+            "min": float(arr.min()),
+            "max": float(arr.max()),
+            "mean": float(arr.mean()),
+            "std": float(arr.std()),
+        }
+
+    normal_stats = _stats(normal_scores)
+    abnormal_stats = _stats(abnormal_scores)
+
+    t_low: float | None = None
+    t_high: float | None = None
+
+    if normal_scores and abnormal_scores:
+        max_n = max(normal_scores)
+        min_a = min(abnormal_scores)
+        if max_n < min_a:
+            # Красивый разрыв: берём границы по краям и оставляем между ними «серую зону».
+            t_low = round(max_n, 4)
+            t_high = round(min_a, 4)
+        else:
+            # Пересечение распределений: берём перцентили 90%/10% как мягкие границы.
+            n_arr = np.asarray(normal_scores, dtype=float)
+            a_arr = np.asarray(abnormal_scores, dtype=float)
+            t_low = float(np.percentile(n_arr, 90))
+            t_high = float(np.percentile(a_arr, 10))
+            t_low = round(t_low, 4)
+            t_high = round(t_high, 4)
+
+    return CalibrationResult(
+        normal_count=len(normal_scores),
+        abnormal_count=len(abnormal_scores),
+        normal_stats=normal_stats,
+        abnormal_stats=abnormal_stats,
+        suggested_t_low=t_low,
+        suggested_t_high=t_high,
+        samples=samples,
     )
 
 
