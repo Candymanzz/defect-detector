@@ -10,11 +10,13 @@ from main import (
     NORMAL_DIR,
     ABNORMAL_DIR,
     RESULTS_DIR,
+    CALIBRATION_BOUNDS_FILE,
     _build_patchcore_model,
     _build_transforms,
     _find_latest_lightning_ckpt,
     ensure_trained_model,
-    _compute_raw_and_score_from_anomaly_map,
+    _compute_raw_from_anomaly_map,
+    _min_max_normalize,
 )
 
 
@@ -47,8 +49,8 @@ def main():
     total = len(file_list)
     print(f"Найдено {total} изображений. Загрузка модели...", flush=True)
 
-    # Готовим одну модель и один набор трансформов для всех изображений.
-    model = _build_patchcore_model()
+    # Готовим модель с теми же слоями, что и чекпоинт (layer2+layer3 или layer1+layer2).
+    model = _build_patchcore_model(ckpt)
     state = torch.load(str(ckpt), map_location="cpu", weights_only=False)
     model.load_state_dict(state["state_dict"], strict=False)
     model.eval()
@@ -77,8 +79,8 @@ def main():
                 if anomaly_map is None and isinstance(out, dict):
                     anomaly_map = out.get("anomaly_map")
 
-                raw, score = _compute_raw_and_score_from_anomaly_map(anomaly_map)
-                print(f"  [{done}/{total}] {rel} score={score:.4f}", flush=True)
+                raw = _compute_raw_from_anomaly_map(anomaly_map)
+                print(f"  [{done}/{total}] {rel} raw_score={raw:.4f}", flush=True)
             except Exception as e:  # noqa: BLE001
                 print(f"  [{done}/{total}] {rel} ОШИБКА: {e}", flush=True)
                 results.append(
@@ -95,11 +97,23 @@ def main():
                     "path": rel,
                     "kind": kind_,
                     "raw_score": raw,
-                    "score": score,
                 }
             )
 
+    # Min-Max границы и нормализованный score
+    raw_scores = [r["raw_score"] for r in results if "raw_score" in r]
+    raw_min = min(raw_scores) if raw_scores else 0.0
+    raw_max = max(raw_scores) if raw_scores else 1.0
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    bounds_path = RESULTS_DIR / CALIBRATION_BOUNDS_FILE
+    with bounds_path.open("w", encoding="utf-8") as f:
+        json.dump({"raw_score_min": raw_min, "raw_score_max": raw_max}, f, indent=2)
+    print(f"Границы калибровки: raw_min={raw_min:.4f} raw_max={raw_max:.4f} -> {bounds_path}")
+
+    for r in results:
+        if "raw_score" in r:
+            r["score"] = _min_max_normalize(r["raw_score"], raw_min, raw_max)
+
     out_path = RESULTS_DIR / "calibration_scores.json"
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
