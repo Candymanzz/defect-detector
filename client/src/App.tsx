@@ -35,6 +35,21 @@ function App() {
     message?: string
   } | null>(null)
 
+  // Совмещённый вывод: объединяем MSE-сравнение и Patchcore
+  const combinedResult = (() => {
+    if (!compareResult && !anomalibResult) return null
+    const mseDefect = compareResult?.defect ?? null
+    const patchcoreDefect =
+      anomalibResult != null ? anomalibResult.score >= anomalibResult.threshold : null
+    const finalDefect = (mseDefect ?? false) || (patchcoreDefect ?? false)
+    let note = ''
+    if (mseDefect != null && patchcoreDefect != null && mseDefect !== patchcoreDefect) {
+      note =
+        'Классические сравнение и Patchcore расходятся: проверьте зону дефекта по теплокарте и по контуру.'
+    }
+    return { finalDefect, mseDefect, patchcoreDefect, note }
+  })()
+
   const handleReferenceSelected = useCallback((url: string, width: number, height: number) => {
     if (referenceImageUrl) URL.revokeObjectURL(referenceImageUrl)
     setReferenceImageUrl(url)
@@ -293,6 +308,33 @@ function App() {
                     testImageSize={testImageSize}
                     compareResult={compareResult}
                   />
+                )}
+              </div>
+            )}
+
+            {combinedResult && (
+              <div className="result-block result-block--combined">
+                <div
+                  className={`result ${
+                    combinedResult.finalDefect ? 'result--defect' : 'result--ok'
+                  }`}
+                >
+                  <span className="result__label">Совмещённый вывод:</span>
+                  <span className="result__value">
+                    {combinedResult.finalDefect ? 'Брак' : 'Нет брака'}
+                  </span>
+                </div>
+                <p className="result-block__mse">
+                  MSE → {combinedResult.mseDefect == null ? 'нет данных' : combinedResult.mseDefect ? 'брак' : 'норма'}
+                  {' · '}Patchcore →
+                  {combinedResult.patchcoreDefect == null
+                    ? 'нет данных'
+                    : combinedResult.patchcoreDefect
+                    ? 'брак'
+                    : 'норма'}
+                </p>
+                {combinedResult.note && (
+                  <p className="result-block__message">{combinedResult.note}</p>
                 )}
               </div>
             )}
