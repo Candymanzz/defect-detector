@@ -20,16 +20,16 @@ export interface PatchcoreAnalyzeError {
 }
 
 /**
- * Отправляет эталон и тест на анализ, возвращает результат или ошибку в том же формате.
+ * Отправляет тест (и опционально эталон) на анализ. Для нейросети достаточно тестового изображения.
  */
 export async function analyzePatchcore(
   apiBaseUrl: string,
-  referenceBlob: Blob,
   testBlob: Blob,
-  threshold: number
+  threshold: number,
+  referenceBlob?: Blob | null
 ): Promise<PatchcoreAnalyzeResult | PatchcoreAnalyzeError> {
   const form = new FormData()
-  form.append('reference', referenceBlob, 'reference.png')
+  if (referenceBlob) form.append('reference', referenceBlob, 'reference.png')
   form.append('test', testBlob, 'test.png')
   form.append('threshold', String(threshold))
 
