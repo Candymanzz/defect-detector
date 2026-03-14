@@ -1,0 +1,35 @@
+# Запуск фронтенда и бэкенда одной командой:
+#   docker compose up --build
+#
+# Фронтенд: http://localhost:3000 (проксирует /api на бэкенд)
+# Бэкенд:   http://localhost:8000
+
+services:
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      # Датасет для обучения и калибровки (положите фото в server/dataset/normal и server/dataset/abnormal)
+      - ./server/dataset:/app/dataset
+      # Чекпоинты и calibration_bounds.json сохраняются здесь
+      - defect-results:/app/results
+    environment:
+      - LOG_LEVEL=INFO
+
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+      args:
+        # URL бэкенда с точки зрения браузера (при запросе с localhost:3000 бэкенд доступен по этому адресу)
+        VITE_API_URL: http://localhost:8000
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  defect-results:

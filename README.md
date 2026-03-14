@@ -61,6 +61,28 @@ npm run build
 
 Статика в `client/dist/`. Раздавайте любым HTTP-сервером (Nginx, static hosting); запросы к API уходят на `VITE_API_URL`.
 
+## Docker
+
+**Оба сервиса одной командой:**
+```bash
+docker compose up --build
+```
+- Фронтенд: http://localhost:3000  
+- Бэкенд: http://localhost:8000  
+
+Датасет для обучения: `server/dataset/` (normal/abnormal). Результаты обучения и калибровки сохраняются в volume `defect-results`.
+
+**По отдельности:**
+```bash
+# Бэкенд
+docker build -t defect-detector-backend ./server
+docker run -p 8000:8000 -v $(pwd)/server/dataset:/app/dataset -v defect-results:/app/results defect-detector-backend
+
+# Фронтенд (подставьте свой URL бэкенда)
+docker build --build-arg VITE_API_URL=http://localhost:8000 -t defect-detector-frontend ./client
+docker run -p 80:80 defect-detector-frontend
+```
+
 ## Добавление своего сервиса между клиентом и бэкендом
 
 Если нужно вставить прокси, BFF, шлюз или другой слой между фронтендом и API (логирование, авторизация, свой домен): контракт API, форматы запросов/ответов и примеры описаны в **[docs/Integration.md](docs/Integration.md)**.
