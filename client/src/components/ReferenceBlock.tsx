@@ -44,7 +44,6 @@ export function ReferenceBlock({
   )
 
   const hasContour = contourPoints.length >= 3
-  const canUseMse = referenceImageUrl != null && hasContour
 
   return (
     <section className="block reference-block">
