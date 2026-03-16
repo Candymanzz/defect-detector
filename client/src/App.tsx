@@ -43,6 +43,7 @@ function App() {
     setReferenceImageSize({ width, height })
     setContourPoints([])
     setCompareResult(null)
+    setPatchcoreResult(null)
     setMseSkipReason(null)
   }, [referenceImageUrl])
 
@@ -105,6 +106,16 @@ function App() {
         refBlob
       )
       setPatchcoreResult(result)
+    } catch (e) {
+      setPatchcoreResult({
+        defect: false,
+        score: 0,
+        threshold: patchcoreThreshold,
+        raw_score: null,
+        heatmap_base64: null,
+        message: e instanceof Error ? e.message : 'Ошибка запроса к бэкенду Patchcore',
+        error: true,
+      })
     } finally {
       setPatchcoreRunning(false)
     }
