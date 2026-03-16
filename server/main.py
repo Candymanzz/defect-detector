@@ -88,7 +88,8 @@ RESULTS_DIR = Path("./results/patchcore_bucket_labels").resolve()
 CALIBRATION_BOUNDS_FILE = "calibration_bounds.json"
 
 # Мягкая нормализация score без калибровки: score = 1 - exp(-raw / K). Чем больше K, тем медленнее рост.
-SCORE_SOFTEN_K = 8.0
+# K=14: нормальные кадры (raw ~8) дают score ~0.44, брак (raw 20+) — 0.76+; при пороге 0.5–0.62 меньше ложных срабатываний.
+SCORE_SOFTEN_K = 14.0
 
 # Нормализация под ImageNet (backbone претренирован на нём)
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -612,7 +613,7 @@ def _normalize_score_for_response(raw: float) -> float:
     bounds = _load_calibration_bounds()
     if bounds is not None:
         return _min_max_normalize(raw, bounds[0], bounds[1])
-    # Без калибровки — мягкая формула (как в рабочей версии): score в [0,1], порог 0.5 осмыслен
+    # Без калибровки — мягкая формула: score в [0,1]. Для точных порогов по вашему датасету вызовите GET /api/patchcore/calibrate.
     score = 1.0 - math.exp(-raw / SCORE_SOFTEN_K)
     return max(0.0, min(1.0, score))
 
