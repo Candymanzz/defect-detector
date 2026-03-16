@@ -9,6 +9,8 @@ export interface PatchcoreAnalyzeResult {
   raw_score?: number | null
   heatmap_base64: string | null
   message?: string
+  /** true, если результат из catch — ошибка сети/запроса, а не ответ API */
+  error?: boolean
 }
 
 export interface PatchcoreAnalyzeError {
