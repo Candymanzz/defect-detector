@@ -17,7 +17,9 @@ function getCombinedResult(
   if (!compareResult && !anomalibResult) return null
   const mseDefect = compareResult?.defect ?? null
   const patchcoreDefect =
-    anomalibResult != null ? anomalibResult.score >= anomalibResult.threshold : null
+    anomalibResult != null && !anomalibResult.error
+      ? anomalibResult.score >= anomalibResult.threshold
+      : null
   const finalDefect = (mseDefect ?? false) || (patchcoreDefect ?? false)
   const note =
     mseDefect != null && patchcoreDefect != null && mseDefect !== patchcoreDefect
@@ -38,30 +40,46 @@ export function ResultBlocks({
     <>
       {anomalibResult && (
         <div className="result-block result-block--anomalib">
-          <div className={`result ${anomalibResult.defect ? 'result--defect' : 'result--ok'}`}>
-            <span className="result__label">Anomalib:</span>
-            <span className="result__value">{anomalibResult.defect ? 'Брак' : 'Нет брака'}</span>
-          </div>
-          <p className="result-block__mse">
-            score (0–1) = {anomalibResult.score.toFixed(4)}
-            {anomalibResult.raw_score != null && (
-              <> · сырой = {Number(anomalibResult.raw_score).toFixed(2)}</>
-            )}{' '}
-            (порог {anomalibResult.threshold} →{' '}
-            {anomalibResult.score >= anomalibResult.threshold ? 'брак' : 'норма'})
-          </p>
-          {anomalibResult.message && (
-            <p className="result-block__message">{anomalibResult.message}</p>
-          )}
-          {anomalibResult.heatmap_base64 && (
-            <div className="result-block__heatmap">
-              <p className="defect-highlight__caption">Карта аномалий (Patchcore)</p>
-              <img
-                src={`data:image/png;base64,${anomalibResult.heatmap_base64}`}
-                alt="Heatmap"
-                className="result-block__heatmap-img"
-              />
-            </div>
+          {anomalibResult.error ? (
+            <>
+              <div className="result result--defect">
+                <span className="result__label">Patchcore:</span>
+                <span className="result__value">Ошибка запроса</span>
+              </div>
+              <p className="result-block__message">
+                {anomalibResult.message}
+                {anomalibResult.message?.includes('fetch') &&
+                  ' — проверьте, что бэкенд запущен и доступен.'}
+              </p>
+            </>
+          ) : (
+            <>
+              <div className={`result ${anomalibResult.defect ? 'result--defect' : 'result--ok'}`}>
+                <span className="result__label">Patchcore:</span>
+                <span className="result__value">{anomalibResult.defect ? 'Брак' : 'Нет брака'}</span>
+              </div>
+              <p className="result-block__mse">
+                score (0–1) = {anomalibResult.score.toFixed(4)}
+                {anomalibResult.raw_score != null && (
+                  <> · сырой = {Number(anomalibResult.raw_score).toFixed(2)}</>
+                )}{' '}
+                (порог {anomalibResult.threshold} →{' '}
+                {anomalibResult.score >= anomalibResult.threshold ? 'брак' : 'норма'})
+              </p>
+              {anomalibResult.message && (
+                <p className="result-block__message">{anomalibResult.message}</p>
+              )}
+              {anomalibResult.heatmap_base64 && (
+                <div className="result-block__heatmap">
+                  <p className="defect-highlight__caption">Карта аномалий (Patchcore)</p>
+                  <img
+                    src={`data:image/png;base64,${anomalibResult.heatmap_base64}`}
+                    alt="Heatmap"
+                    className="result-block__heatmap-img"
+                  />
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
