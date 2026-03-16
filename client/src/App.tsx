@@ -22,7 +22,7 @@ function App() {
   const [defectThresholdMse, setDefectThresholdMse] = useState(120)
   const [ignoreDiffThreshold, setIgnoreDiffThreshold] = useState(6)
   const [apiBaseUrl, setApiBaseUrl] = useState(config.apiBaseUrl)
-  const [patchcoreThreshold, setPatchcoreThreshold] = useState(0.5)
+  const [patchcoreThreshold, setPatchcoreThreshold] = useState(0.62)
 
   const [mseRunning, setMseRunning] = useState(false)
   const [patchcoreRunning, setPatchcoreRunning] = useState(false)

@@ -13,6 +13,7 @@ import base64
 import io
 import json
 import logging
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -85,6 +86,9 @@ PATCHCORE_NUM_NEIGHBORS = 15   # K ближайших соседей при ср
 # Результаты обучения и калибровки
 RESULTS_DIR = Path("./results/patchcore_bucket_labels").resolve()
 CALIBRATION_BOUNDS_FILE = "calibration_bounds.json"
+
+# Мягкая нормализация score без калибровки: score = 1 - exp(-raw / K). Чем больше K, тем медленнее рост.
+SCORE_SOFTEN_K = 8.0
 
 # Нормализация под ImageNet (backbone претренирован на нём)
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -301,9 +305,11 @@ def _train_patchcore() -> Path:
     # Engine с пиксельными метриками PRO и F1Max:
     # - PRO (Per‑Region Overlap) хорошо отражает качество сегментации аномалий;
     # - F1Max используется для вычисления адаптивного порога по F1‑кривой.
+    # На Mac с M‑серией backend MPS часто упирается в лимит памяти даже на небольших датасетах.
+    # Для стабильности принудительно обучаем на CPU.
     engine = Engine(
         default_root_dir=str(RESULTS_DIR),
-        accelerator="auto",
+        accelerator="cpu",
         devices=1,
         max_epochs=50,
     )
@@ -602,12 +608,13 @@ def _extract_raw_score_from_predictions(predictions) -> tuple[float, str]:
 
 
 def _normalize_score_for_response(raw: float) -> float:
-    """Применяем Min-Max по calibration_bounds; если калибровки нет — возвращаем raw как есть."""
+    """Применяем Min-Max по calibration_bounds; если калибровки нет — мягкая нормализация в [0,1]."""
     bounds = _load_calibration_bounds()
     if bounds is not None:
         return _min_max_normalize(raw, bounds[0], bounds[1])
-    logger.warning("calibration_bounds.json не найден: score=raw=%.4f. Запустите калибровку.", raw)
-    return raw
+    # Без калибровки — мягкая формула (как в рабочей версии): score в [0,1], порог 0.5 осмыслен
+    score = 1.0 - math.exp(-raw / SCORE_SOFTEN_K)
+    return max(0.0, min(1.0, score))
 
 
 # =============================================================================
@@ -660,7 +667,7 @@ async def analyze_patchcore(
     test: UploadFile = File(..., description="Тестовое изображение ведра для проверки на царапины"),
     # Порог оставляем чисто для UI — реальное решение о браке принимается
     # по адаптивному порогу из модели (F1AdaptiveThreshold), см. ниже.
-    threshold: float = Form(0.5, description="Порог для UI (игнорируется адаптивной логикой)"),
+    threshold: float = Form(0.62, description="Порог для UI: score >= threshold → брак (по умолчанию 0.62 для разделения близких скоров)"),
 ):
     """
     Анализ тестового изображения через обученную модель Patchcore.
@@ -708,7 +715,8 @@ async def analyze_patchcore(
             if lightning_ckpt is not None:
                 try:
                     model = _build_patchcore_model(lightning_ckpt)
-                    engine = Engine(accelerator="auto", devices=1)
+                    # Инференс через Lightning Engine тоже гоняем через CPU, чтобы не трогать MPS.
+                    engine = Engine(accelerator="cpu", devices=1)
                     pred_output = engine.predict(
                         model=model,
                         ckpt_path=str(lightning_ckpt),
