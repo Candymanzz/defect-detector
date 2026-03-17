@@ -79,8 +79,8 @@ MIN_ABNORMAL_IMAGES = 3  # Ниже — test_split_mode=SYNTHETIC
 IMAGE_RESIZE = 512
 IMAGE_CROP = 512
 
-# Patchcore: слои ResNet (layer1+layer2 — локальные текстуры; старые чекпоинты — layer2+layer3)
-CORESET_SAMPLING_RATIO = 0.1   # Доля патчей в memory bank (меньше — меньше шума от текста)
+# Patchcore: слои ResNet (layer2+layer3 — более высокоуровневые структуры; старые чекпоинты также могут содержать layer2+layer3)
+CORESET_SAMPLING_RATIO = 0.2   # Доля патчей в memory bank (0.2 даёт более насыщенную «память» нормальных образцов)
 PATCHCORE_NUM_NEIGHBORS = 15   # K ближайших соседей при сравнении патча с памятью
 
 # Результаты обучения и калибровки
@@ -288,14 +288,15 @@ def _train_patchcore() -> Path:
     logger.info("Старт обучения Patchcore на датасете %s", DATASET_ROOT)
     datamodule = _create_datamodule()
 
-    # Patchcore с wide_resnet50_2; pre_processor 384×384 для высокого разрешения камеры.
+    # Patchcore с wide_resnet50_2; pre_processor 512×512 (Resize) + 512×512 (CenterCrop),
+    # что строго соответствует трансформациям датамодуля и TorchInferencer.
     patchcore_pre_processor = Patchcore.configure_pre_processor(
         image_size=(IMAGE_RESIZE, IMAGE_RESIZE),
         center_crop_size=(IMAGE_CROP, IMAGE_CROP),
     )
     model = Patchcore(
         backbone="wide_resnet50_2",
-        layers=["layer1", "layer2"],
+        layers=["layer2", "layer3"],
         coreset_sampling_ratio=CORESET_SAMPLING_RATIO,
         num_neighbors=PATCHCORE_NUM_NEIGHBORS,
         pre_processor=patchcore_pre_processor,
@@ -374,20 +375,21 @@ def _find_latest_lightning_ckpt() -> Path | None:
 def _infer_patchcore_layers_from_state(state_dict: dict) -> list[str]:
     """
     По ключам state_dict определяем, с какими слоями обучен чекпоинт.
-    layer3 в ключах → старый вариант ["layer2", "layer3"], иначе ["layer1", "layer2"].
+    При наличии признаков layer3 считаем, что модель обучена на ["layer2", "layer3"].
+    В остальных случаях по умолчанию используем ["layer2", "layer3"] для wide_resnet50_2.
     """
     for key in state_dict:
         if "layer3" in key:
             return ["layer2", "layer3"]
-    return ["layer1", "layer2"]
+    return ["layer2", "layer3"]
 
 
 def _build_patchcore_model(ckpt_path: Path | None = None) -> Patchcore:
     """
     Создаёт экземпляр Patchcore. Если передан ckpt_path — подбирает layers под чекпоинт,
-    чтобы старый чекпоинт (layer2+layer3) и новый (layer1+layer2) работали без ошибки размерностей.
+    чтобы различающиеся по конфигурации чекпоинты (layer2+layer3) работали без ошибки размерностей.
     """
-    layers = ["layer1", "layer2"]
+    layers = ["layer2", "layer3"]
     if ckpt_path is not None and ckpt_path.exists():
         try:
             ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
@@ -571,15 +573,19 @@ def _extract_raw_score_from_predictions(predictions) -> tuple[float, str]:
         anomaly_map = predictions.get("anomaly_map")
 
     raw = 0.0
-    raw_source = "anomaly_map mean"
+    raw_source = "anomaly_map max"
     if anomaly_map is not None:
         am = anomaly_map.detach().cpu().numpy() if hasattr(anomaly_map, "detach") else np.asarray(anomaly_map)
         am = am.squeeze()
         if am.size:
-            am_mean = float(np.mean(am))
+            am_max = float(np.max(am))
             am_std = float(np.std(am))
-            raw = (am_mean / 10.0) if am_mean > 2.0 else (am_mean * 10.0)
-            if am_std < 1e-5:
+            raw = (am_max / 10.0) if am_max > 2.0 else (am_max * 10.0)
+            if am_std < 1e-6:
+                logger.error(
+                    "anomaly_map имеет нулевую дисперсию (std=%.6f). Возможна проблема инициализации весов или несоответствие размеров.",
+                    am_std,
+                )
                 score_val = getattr(predictions, "pred_score", None)
                 if score_val is None and isinstance(predictions, dict):
                     score_val = predictions.get("pred_score")
@@ -593,7 +599,8 @@ def _extract_raw_score_from_predictions(predictions) -> tuple[float, str]:
                     raw_source = "pred_score"
                     logger.warning(
                         "anomaly_map постоянна, pred_score=%.4f -> raw=%.4f. Возможно старый .pt (layer2+layer3) — переобучите.",
-                        ps_val, raw,
+                        ps_val,
+                        raw,
                     )
     if raw <= 0.0:
         raw_source = "pred_score (fallback)"
@@ -609,13 +616,48 @@ def _extract_raw_score_from_predictions(predictions) -> tuple[float, str]:
 
 
 def _normalize_score_for_response(raw: float) -> float:
-    """Применяем Min-Max по calibration_bounds; если калибровки нет — мягкая нормализация в [0,1]."""
+    """
+    Применяем только Min-Max по calibration_bounds.
+    Если calibration_bounds.json отсутствует или некорректен — считаем, что калибровка не проведена,
+    и выбрасываем исключение, чтобы API явно сигнализировало об ошибке конфигурации.
+    """
     bounds = _load_calibration_bounds()
-    if bounds is not None:
-        return _min_max_normalize(raw, bounds[0], bounds[1])
-    # Без калибровки — мягкая формула: score в [0,1]. Для точных порогов по вашему датасету вызовите GET /api/patchcore/calibrate.
-    score = 1.0 - math.exp(-raw / SCORE_SOFTEN_K)
-    return max(0.0, min(1.0, score))
+    if bounds is None:
+        raise RuntimeError(
+            "Не найдены границы калибровки raw_score (calibration_bounds.json). "
+            "Перед использованием инференса необходимо вызвать /api/patchcore/calibrate."
+        )
+    return _min_max_normalize(raw, bounds[0], bounds[1])
+
+
+def _extract_adaptive_threshold_from_predictions(predictions) -> float | None:
+    """
+    Пытаемся извлечь адаптивный порог (F1AdaptiveThreshold), вычисленный Anomalib при обучении.
+    Значение может храниться в metadata/мета‑поля предсказания или в атрибуте image_threshold.
+    """
+    # Вариант с атрибутом image_threshold (некоторые версии TorchInferencer)
+    image_thr = getattr(predictions, "image_threshold", None)
+    if isinstance(image_thr, (float, int)):
+        return float(image_thr)
+
+    # Вариант с metadata/meta
+    meta = getattr(predictions, "metadata", None)
+    if meta is None and isinstance(predictions, dict):
+        meta = predictions.get("metadata") or predictions.get("meta")
+
+    if isinstance(meta, dict):
+        for key in ("image_threshold", "threshold", "image_thr"):
+            if key in meta and isinstance(meta[key], (float, int)):
+                return float(meta[key])
+
+    # Иногда Anomalib может класть порог как отдельное поле в самом предсказании
+    if isinstance(predictions, dict):
+        for key in ("image_threshold", "threshold", "image_thr"):
+            val = predictions.get(key)
+            if isinstance(val, (float, int)):
+                return float(val)
+
+    return None
 
 
 # =============================================================================
@@ -666,9 +708,9 @@ async def analyze_patchcore(
         description="Эталонное изображение (для Patchcore не требуется и не используется)",
     ),
     test: UploadFile = File(..., description="Тестовое изображение ведра для проверки на царапины"),
-    # Порог оставляем чисто для UI — реальное решение о браке принимается
-    # по адаптивному порогу из модели (F1AdaptiveThreshold), см. ниже.
-    threshold: float = Form(0.62, description="Порог для UI: score >= threshold → брак (по умолчанию 0.62 для разделения близких скоров)"),
+    # Порог оставляем чисто для UI: для данного датасета ниже score → сильнее подозрение на брак.
+    # Реальное решение о браке принимается по адаптивному порогу из модели (F1AdaptiveThreshold), если он есть.
+    threshold: float = Form(0.5, description="Порог для UI: score <= threshold → брак (по умолчанию 0.5 для данного датасета)"),
 ):
     """
     Анализ тестового изображения через обученную модель Patchcore.
@@ -694,6 +736,19 @@ async def analyze_patchcore(
     except Exception as e:
         logger.exception("Не удалось подготовить обученную модель Patchcore")
         raise HTTPException(status_code=500, detail=f"Ошибка подготовки модели Patchcore: {e!s}")
+
+    # Обязательное наличие calibration_bounds.json: без него Min-Max нормализация и пороги некорректны.
+    if _load_calibration_bounds() is None:
+        logger.warning(
+            "calibration_bounds.json не найден. Результаты инференса будут некорректны без предварительной калибровки."
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Отсутствует calibration_bounds.json. "
+                "Перед использованием инференса вызовите /api/patchcore/calibrate для калибровки на ваших данных."
+            ),
+        )
 
     # Сохраняем тестовое изображение во временный файл
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
@@ -766,12 +821,44 @@ async def analyze_patchcore(
         if anomaly_map is not None:
             am_debug = anomaly_map.detach().cpu().numpy() if hasattr(anomaly_map, "detach") else np.asarray(anomaly_map)
             am_flat = am_debug.flatten()
-            logger.info("anomaly_map shape=%s min=%.4f max=%.4f mean=%.4f std=%.4f", am_debug.shape, float(np.min(am_flat)), float(np.max(am_flat)), float(np.mean(am_flat)), float(np.std(am_flat)))
+            am_std = float(np.std(am_flat)) if am_flat.size else 0.0
+            logger.info(
+                "anomaly_map shape=%s min=%.4f max=%.4f mean=%.4f std=%.4f",
+                am_debug.shape,
+                float(np.min(am_flat)),
+                float(np.max(am_flat)),
+                float(np.mean(am_flat)),
+                am_std,
+            )
+            if am_std < 1e-6:
+                logger.error(
+                    "anomaly_map из инференса имеет нулевую дисперсию (std=%.6f). "
+                    "Проверьте соответствие конфигурации слоёв (layers) и размеров входного изображения.",
+                    am_std,
+                )
         raw, raw_source = _extract_raw_score_from_predictions(predictions)
         logger.info("Patchcore raw_score=%.4f (из %s)", raw, raw_source)
         score = _normalize_score_for_response(raw)
-        logger.info("score нормализованный=%.4f (порог=%.2f -> defect=%s)", score, threshold, score >= threshold)
-        defect = score >= threshold
+
+        # Используем адаптивный порог F1AdaptiveThreshold, вычисленный Anomalib при обучении.
+        adaptive_threshold = _extract_adaptive_threshold_from_predictions(predictions)
+        effective_threshold = adaptive_threshold if adaptive_threshold is not None else float(threshold)
+        if adaptive_threshold is None:
+            logger.warning(
+                "Не удалось извлечь адаптивный порог (F1AdaptiveThreshold) из предсказаний. "
+                "Используется UI‑порог %.4f.",
+                effective_threshold,
+            )
+
+        # Для текущего датасета более информативен низкий score как индикатор брака:
+        # чем ниже score, тем сильнее подозрение на дефект.
+        logger.info(
+            "score нормализованный=%.4f (порог=%.4f -> defect=%s; правило: score <= threshold → defect)",
+            score,
+            effective_threshold,
+            score <= effective_threshold,
+        )
+        defect = score <= effective_threshold
     except Exception as e:
         logger.exception("Не удалось разобрать вывод модели")
         raise HTTPException(status_code=500, detail=f"Неверный формат предсказания: {e!s}")
@@ -790,7 +877,7 @@ async def analyze_patchcore(
     return PatchcoreResult(
         defect=defect,
         score=round(score, 4),
-        threshold=float(threshold),
+        threshold=float(effective_threshold),
         heatmap_base64=heatmap_b64,
         message=None,
         raw_score=round(raw, 4),
@@ -828,9 +915,17 @@ def _compute_raw_from_anomaly_map(anomaly_map: np.ndarray | None) -> float:
     if not arr.size:
         return 0.0
 
-    mean_val = float(np.mean(arr))
+    max_val = float(np.max(arr))
+    std_val = float(np.std(arr))
+    if std_val < 1e-6:
+        logger.error(
+            "Калибровка: anomaly_map имеет нулевую дисперсию (std=%.6f). "
+            "Возможна проблема с конфигурацией Patchcore или трансформациями Resize/CenterCrop.",
+            std_val,
+        )
+
     # Сырые значения от model.model() для Patchcore — в районе 50–100; от Engine — в [0,1].
-    raw = (mean_val / 10.0) if mean_val > 2.0 else (mean_val * 10.0)
+    raw = (max_val / 10.0) if max_val > 2.0 else (max_val * 10.0)
     return raw
 
 
