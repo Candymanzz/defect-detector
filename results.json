@@ -1,0 +1,650 @@
+{
+  "normal_count": 100,
+  "abnormal_count": 5,
+  "normal_stats": {
+    "min": 0.37439096618232737,
+    "max": 1.0,
+    "mean": 0.6660308529930434,
+    "std": 0.13698544266545787
+  },
+  "abnormal_stats": {
+    "min": 0.0,
+    "max": 0.6617982835013374,
+    "mean": 0.41547497765452945,
+    "std": 0.22989537947593294
+  },
+  "suggested_t_low": 0.839,
+  "suggested_t_high": 0.149,
+  "samples": [
+    {
+      "path": "normal/camera-01_20260311_153341_856.jpg",
+      "kind": "normal",
+      "score": 0.5605,
+      "raw_score": 104.7441
+    },
+    {
+      "path": "normal/camera-01_20260311_153342_377.jpg",
+      "kind": "normal",
+      "score": 0.7134,
+      "raw_score": 106.1446
+    },
+    {
+      "path": "normal/camera-01_20260311_153342_916.jpg",
+      "kind": "normal",
+      "score": 0.5811,
+      "raw_score": 104.9331
+    },
+    {
+      "path": "normal/camera-01_20260311_153343_435.jpg",
+      "kind": "normal",
+      "score": 0.6531,
+      "raw_score": 105.5921
+    },
+    {
+      "path": "normal/camera-01_20260311_153343_971.jpg",
+      "kind": "normal",
+      "score": 0.5117,
+      "raw_score": 104.2976
+    },
+    {
+      "path": "normal/camera-01_20260311_153344_511.jpg",
+      "kind": "normal",
+      "score": 0.6451,
+      "raw_score": 105.5196
+    },
+    {
+      "path": "normal/camera-01_20260311_153345_054.jpg",
+      "kind": "normal",
+      "score": 0.563,
+      "raw_score": 104.767
+    },
+    {
+      "path": "normal/camera-01_20260311_153345_588.jpg",
+      "kind": "normal",
+      "score": 0.7818,
+      "raw_score": 106.7712
+    },
+    {
+      "path": "normal/camera-01_20260311_153346_127.jpg",
+      "kind": "normal",
+      "score": 0.6509,
+      "raw_score": 105.5726
+    },
+    {
+      "path": "normal/camera-01_20260311_153346_666.jpg",
+      "kind": "normal",
+      "score": 0.7045,
+      "raw_score": 106.0632
+    },
+    {
+      "path": "normal/camera-01_20260311_153347_209.jpg",
+      "kind": "normal",
+      "score": 0.5393,
+      "raw_score": 104.5499
+    },
+    {
+      "path": "normal/camera-01_20260311_153347_743.jpg",
+      "kind": "normal",
+      "score": 0.4187,
+      "raw_score": 103.4456
+    },
+    {
+      "path": "normal/camera-01_20260311_153348_282.jpg",
+      "kind": "normal",
+      "score": 0.551,
+      "raw_score": 104.6573
+    },
+    {
+      "path": "normal/camera-01_20260311_153348_820.jpg",
+      "kind": "normal",
+      "score": 0.6621,
+      "raw_score": 105.6749
+    },
+    {
+      "path": "normal/camera-01_20260311_153349_364.jpg",
+      "kind": "normal",
+      "score": 0.6107,
+      "raw_score": 105.2044
+    },
+    {
+      "path": "normal/camera-01_20260311_153349_898.jpg",
+      "kind": "normal",
+      "score": 0.4991,
+      "raw_score": 104.182
+    },
+    {
+      "path": "normal/camera-01_20260311_153350_440.jpg",
+      "kind": "normal",
+      "score": 0.7852,
+      "raw_score": 106.8025
+    },
+    {
+      "path": "normal/camera-01_20260311_153350_975.jpg",
+      "kind": "normal",
+      "score": 0.6307,
+      "raw_score": 105.3875
+    },
+    {
+      "path": "normal/camera-01_20260311_153351_514.jpg",
+      "kind": "normal",
+      "score": 0.5485,
+      "raw_score": 104.6341
+    },
+    {
+      "path": "normal/camera-01_20260311_153352_052.jpg",
+      "kind": "normal",
+      "score": 0.729,
+      "raw_score": 106.2879
+    },
+    {
+      "path": "normal/camera-01_20260311_153352_594.jpg",
+      "kind": "normal",
+      "score": 0.6418,
+      "raw_score": 105.4888
+    },
+    {
+      "path": "normal/camera-01_20260311_153353_141.jpg",
+      "kind": "normal",
+      "score": 0.5274,
+      "raw_score": 104.4414
+    },
+    {
+      "path": "normal/camera-01_20260311_153353_674.jpg",
+      "kind": "normal",
+      "score": 0.5802,
+      "raw_score": 104.9251
+    },
+    {
+      "path": "normal/camera-01_20260311_153354_179.jpg",
+      "kind": "normal",
+      "score": 0.6785,
+      "raw_score": 105.8247
+    },
+    {
+      "path": "normal/camera-01_20260311_153354_718.jpg",
+      "kind": "normal",
+      "score": 0.7096,
+      "raw_score": 106.1104
+    },
+    {
+      "path": "normal/camera-01_20260311_153355_231.jpg",
+      "kind": "normal",
+      "score": 0.7435,
+      "raw_score": 106.4207
+    },
+    {
+      "path": "normal/camera-01_20260311_153355_770.jpg",
+      "kind": "normal",
+      "score": 0.5906,
+      "raw_score": 105.0204
+    },
+    {
+      "path": "normal/camera-01_20260311_153356_315.jpg",
+      "kind": "normal",
+      "score": 0.7045,
+      "raw_score": 106.0632
+    },
+    {
+      "path": "normal/camera-01_20260311_153356_856.jpg",
+      "kind": "normal",
+      "score": 0.9055,
+      "raw_score": 107.9038
+    },
+    {
+      "path": "normal/camera-01_20260311_153357_389.jpg",
+      "kind": "normal",
+      "score": 0.5177,
+      "raw_score": 104.352
+    },
+    {
+      "path": "normal/camera-01_20260311_153357_923.jpg",
+      "kind": "normal",
+      "score": 0.4571,
+      "raw_score": 103.7976
+    },
+    {
+      "path": "normal/camera-01_20260311_153358_463.jpg",
+      "kind": "normal",
+      "score": 0.7191,
+      "raw_score": 106.1968
+    },
+    {
+      "path": "normal/camera-01_20260311_153359_003.jpg",
+      "kind": "normal",
+      "score": 0.8837,
+      "raw_score": 107.705
+    },
+    {
+      "path": "normal/camera-01_20260311_153359_549.jpg",
+      "kind": "normal",
+      "score": 0.6864,
+      "raw_score": 105.8978
+    },
+    {
+      "path": "normal/camera-01_20260311_153400_079.jpg",
+      "kind": "normal",
+      "score": 0.5964,
+      "raw_score": 105.0735
+    },
+    {
+      "path": "normal/camera-01_20260311_153400_619.jpg",
+      "kind": "normal",
+      "score": 0.3744,
+      "raw_score": 103.0399
+    },
+    {
+      "path": "normal/camera-01_20260311_153401_161.jpg",
+      "kind": "normal",
+      "score": 0.5884,
+      "raw_score": 104.9996
+    },
+    {
+      "path": "normal/camera-01_20260311_153401_696.jpg",
+      "kind": "normal",
+      "score": 0.67,
+      "raw_score": 105.7475
+    },
+    {
+      "path": "normal/camera-01_20260311_153402_241.jpg",
+      "kind": "normal",
+      "score": 0.7582,
+      "raw_score": 106.5551
+    },
+    {
+      "path": "normal/camera-01_20260311_153402_771.jpg",
+      "kind": "normal",
+      "score": 0.8272,
+      "raw_score": 107.1867
+    },
+    {
+      "path": "normal/camera-01_20260311_153403_313.jpg",
+      "kind": "normal",
+      "score": 0.873,
+      "raw_score": 107.6067
+    },
+    {
+      "path": "normal/camera-01_20260311_153403_851.jpg",
+      "kind": "normal",
+      "score": 0.7652,
+      "raw_score": 106.619
+    },
+    {
+      "path": "normal/camera-01_20260311_153404_391.jpg",
+      "kind": "normal",
+      "score": 0.9742,
+      "raw_score": 108.5338
+    },
+    {
+      "path": "normal/camera-01_20260311_153404_927.jpg",
+      "kind": "normal",
+      "score": 0.9674,
+      "raw_score": 108.4712
+    },
+    {
+      "path": "normal/camera-01_20260311_153405_471.jpg",
+      "kind": "normal",
+      "score": 0.5772,
+      "raw_score": 104.8978
+    },
+    {
+      "path": "normal/camera-01_20260311_153406_019.jpg",
+      "kind": "normal",
+      "score": 0.4055,
+      "raw_score": 103.3247
+    },
+    {
+      "path": "normal/camera-01_20260311_153406_549.jpg",
+      "kind": "normal",
+      "score": 0.5561,
+      "raw_score": 104.7037
+    },
+    {
+      "path": "normal/camera-01_20260311_153407_082.jpg",
+      "kind": "normal",
+      "score": 0.9144,
+      "raw_score": 107.9856
+    },
+    {
+      "path": "normal/camera-01_20260311_153407_625.jpg",
+      "kind": "normal",
+      "score": 0.8139,
+      "raw_score": 107.0655
+    },
+    {
+      "path": "normal/camera-01_20260311_153408_159.jpg",
+      "kind": "normal",
+      "score": 1.0,
+      "raw_score": 108.7697
+    },
+    {
+      "path": "normal/camera-01_20260311_153408_699.jpg",
+      "kind": "normal",
+      "score": 0.9597,
+      "raw_score": 108.4005
+    },
+    {
+      "path": "normal/camera-01_20260311_153409_239.jpg",
+      "kind": "normal",
+      "score": 0.5394,
+      "raw_score": 104.551
+    },
+    {
+      "path": "normal/camera-01_20260311_153409_776.jpg",
+      "kind": "normal",
+      "score": 0.5849,
+      "raw_score": 104.9679
+    },
+    {
+      "path": "normal/camera-01_20260311_153410_315.jpg",
+      "kind": "normal",
+      "score": 0.6959,
+      "raw_score": 105.9849
+    },
+    {
+      "path": "normal/camera-01_20260311_153410_856.jpg",
+      "kind": "normal",
+      "score": 0.5812,
+      "raw_score": 104.9343
+    },
+    {
+      "path": "normal/camera-01_20260311_153411_393.jpg",
+      "kind": "normal",
+      "score": 0.5158,
+      "raw_score": 104.3349
+    },
+    {
+      "path": "normal/camera-01_20260311_153411_931.jpg",
+      "kind": "normal",
+      "score": 0.8287,
+      "raw_score": 107.2004
+    },
+    {
+      "path": "normal/camera-01_20260311_153412_481.jpg",
+      "kind": "normal",
+      "score": 0.7734,
+      "raw_score": 106.6947
+    },
+    {
+      "path": "normal/camera-01_20260311_153413_010.jpg",
+      "kind": "normal",
+      "score": 0.5443,
+      "raw_score": 104.5963
+    },
+    {
+      "path": "normal/camera-01_20260311_153413_517.jpg",
+      "kind": "normal",
+      "score": 0.6743,
+      "raw_score": 105.7865
+    },
+    {
+      "path": "normal/camera-01_20260311_153414_031.jpg",
+      "kind": "normal",
+      "score": 0.5534,
+      "raw_score": 104.6798
+    },
+    {
+      "path": "normal/camera-01_20260311_153414_573.jpg",
+      "kind": "normal",
+      "score": 0.9198,
+      "raw_score": 108.0353
+    },
+    {
+      "path": "normal/camera-01_20260311_153415_110.jpg",
+      "kind": "normal",
+      "score": 0.8299,
+      "raw_score": 107.2119
+    },
+    {
+      "path": "normal/camera-01_20260311_153415_649.jpg",
+      "kind": "normal",
+      "score": 0.6392,
+      "raw_score": 105.4656
+    },
+    {
+      "path": "normal/camera-01_20260311_153416_187.jpg",
+      "kind": "normal",
+      "score": 0.6107,
+      "raw_score": 105.2038
+    },
+    {
+      "path": "normal/camera-01_20260311_153416_732.jpg",
+      "kind": "normal",
+      "score": 0.7856,
+      "raw_score": 106.8058
+    },
+    {
+      "path": "normal/camera-01_20260311_153417_265.jpg",
+      "kind": "normal",
+      "score": 0.8211,
+      "raw_score": 107.131
+    },
+    {
+      "path": "normal/camera-01_20260311_153417_803.jpg",
+      "kind": "normal",
+      "score": 0.6428,
+      "raw_score": 105.4985
+    },
+    {
+      "path": "normal/camera-01_20260311_153418_342.jpg",
+      "kind": "normal",
+      "score": 0.6821,
+      "raw_score": 105.8582
+    },
+    {
+      "path": "normal/camera-01_20260311_153418_886.jpg",
+      "kind": "normal",
+      "score": 0.6957,
+      "raw_score": 105.9828
+    },
+    {
+      "path": "normal/camera-01_20260311_153419_418.jpg",
+      "kind": "normal",
+      "score": 0.8106,
+      "raw_score": 107.0352
+    },
+    {
+      "path": "normal/camera-01_20260311_153419_964.jpg",
+      "kind": "normal",
+      "score": 0.7088,
+      "raw_score": 106.1031
+    },
+    {
+      "path": "normal/camera-01_20260311_153420_497.jpg",
+      "kind": "normal",
+      "score": 0.7381,
+      "raw_score": 106.3712
+    },
+    {
+      "path": "normal/camera-01_20260311_153421_037.jpg",
+      "kind": "normal",
+      "score": 0.8353,
+      "raw_score": 107.261
+    },
+    {
+      "path": "normal/camera-01_20260311_153421_583.jpg",
+      "kind": "normal",
+      "score": 0.574,
+      "raw_score": 104.8679
+    },
+    {
+      "path": "normal/camera-01_20260311_153422_112.jpg",
+      "kind": "normal",
+      "score": 0.603,
+      "raw_score": 105.134
+    },
+    {
+      "path": "normal/camera-01_20260311_153422_653.jpg",
+      "kind": "normal",
+      "score": 0.511,
+      "raw_score": 104.2909
+    },
+    {
+      "path": "normal/camera-01_20260311_153423_190.jpg",
+      "kind": "normal",
+      "score": 0.4226,
+      "raw_score": 103.4812
+    },
+    {
+      "path": "normal/camera-01_20260311_153423_729.jpg",
+      "kind": "normal",
+      "score": 0.6765,
+      "raw_score": 105.8073
+    },
+    {
+      "path": "normal/camera-01_20260311_153424_273.jpg",
+      "kind": "normal",
+      "score": 0.7297,
+      "raw_score": 106.2942
+    },
+    {
+      "path": "normal/camera-01_20260311_153424_828.jpg",
+      "kind": "normal",
+      "score": 0.7777,
+      "raw_score": 106.7338
+    },
+    {
+      "path": "normal/camera-01_20260311_153425_345.jpg",
+      "kind": "normal",
+      "score": 0.6235,
+      "raw_score": 105.3214
+    },
+    {
+      "path": "normal/camera-01_20260311_153425_884.jpg",
+      "kind": "normal",
+      "score": 0.8347,
+      "raw_score": 107.256
+    },
+    {
+      "path": "normal/camera-01_20260311_153426_423.jpg",
+      "kind": "normal",
+      "score": 0.5673,
+      "raw_score": 104.8071
+    },
+    {
+      "path": "normal/camera-01_20260311_153426_963.jpg",
+      "kind": "normal",
+      "score": 0.5827,
+      "raw_score": 104.9476
+    },
+    {
+      "path": "normal/camera-01_20260311_153427_503.jpg",
+      "kind": "normal",
+      "score": 0.7712,
+      "raw_score": 106.6739
+    },
+    {
+      "path": "normal/camera-01_20260311_153428_039.jpg",
+      "kind": "normal",
+      "score": 0.5691,
+      "raw_score": 104.8233
+    },
+    {
+      "path": "normal/camera-01_20260311_153428_590.jpg",
+      "kind": "normal",
+      "score": 0.6705,
+      "raw_score": 105.7522
+    },
+    {
+      "path": "normal/camera-01_20260311_153429_124.jpg",
+      "kind": "normal",
+      "score": 0.5162,
+      "raw_score": 104.3386
+    },
+    {
+      "path": "normal/camera-01_20260311_153429_656.jpg",
+      "kind": "normal",
+      "score": 0.8219,
+      "raw_score": 107.1388
+    },
+    {
+      "path": "normal/camera-01_20260311_153430_193.jpg",
+      "kind": "normal",
+      "score": 0.6007,
+      "raw_score": 105.113
+    },
+    {
+      "path": "normal/camera-01_20260311_153430_734.jpg",
+      "kind": "normal",
+      "score": 0.4313,
+      "raw_score": 103.5611
+    },
+    {
+      "path": "normal/camera-01_20260311_153431_270.jpg",
+      "kind": "normal",
+      "score": 0.5919,
+      "raw_score": 105.0317
+    },
+    {
+      "path": "normal/camera-01_20260311_153431_818.jpg",
+      "kind": "normal",
+      "score": 0.5871,
+      "raw_score": 104.9884
+    },
+    {
+      "path": "normal/camera-01_20260311_153432_348.jpg",
+      "kind": "normal",
+      "score": 0.569,
+      "raw_score": 104.8221
+    },
+    {
+      "path": "normal/camera-01_20260311_153432_893.jpg",
+      "kind": "normal",
+      "score": 0.611,
+      "raw_score": 105.2068
+    },
+    {
+      "path": "normal/camera-01_20260311_153433_483.jpg",
+      "kind": "normal",
+      "score": 0.5132,
+      "raw_score": 104.3116
+    },
+    {
+      "path": "normal/camera-01_20260311_153434_052.jpg",
+      "kind": "normal",
+      "score": 0.6851,
+      "raw_score": 105.8857
+    },
+    {
+      "path": "normal/camera-01_20260311_153434_570.jpg",
+      "kind": "normal",
+      "score": 0.57,
+      "raw_score": 104.8315
+    },
+    {
+      "path": "normal/camera-01_20260311_153435_099.jpg",
+      "kind": "normal",
+      "score": 0.8747,
+      "raw_score": 107.6219
+    },
+    {
+      "path": "abnormal/camera-01_20260311_153341_856.jpg",
+      "kind": "abnormal",
+      "score": 0.4641,
+      "raw_score": 103.8614
+    },
+    {
+      "path": "abnormal/camera-01_20260311_153400_619.jpg",
+      "kind": "abnormal",
+      "score": 0.3725,
+      "raw_score": 103.0222
+    },
+    {
+      "path": "abnormal/camera-01_20260311_153409_776.jpg",
+      "kind": "abnormal",
+      "score": 0.0,
+      "raw_score": 99.6109
+    },
+    {
+      "path": "abnormal/camera-01_20260311_153410_856.jpg",
+      "kind": "abnormal",
+      "score": 0.579,
+      "raw_score": 104.9142
+    },
+    {
+      "path": "abnormal/camera-01_20260311_153413_517.jpg",
+      "kind": "abnormal",
+      "score": 0.6618,
+      "raw_score": 105.6722
+    }
+  ]
+}

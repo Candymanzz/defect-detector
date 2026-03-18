@@ -9,6 +9,12 @@ export interface PatchcoreAnalyzeResult {
   raw_score?: number | null
   heatmap_base64: string | null
   message?: string
+  /** время инференса нейросети на сервере (мс) */
+  nn_inference_ms?: number | null
+  /** время постобработки/формирования ответа (мс) */
+  postprocess_ms?: number | null
+  /** суммарное время запроса на сервере (мс) */
+  total_ms?: number | null
   /** true, если результат из catch — ошибка сети/запроса, а не ответ API */
   error?: boolean
 }
@@ -66,5 +72,8 @@ export async function analyzePatchcore(
     raw_score: data.raw_score ?? null,
     heatmap_base64: data.heatmap_base64 ?? null,
     message: data.message,
+    nn_inference_ms: data.nn_inference_ms ?? null,
+    postprocess_ms: data.postprocess_ms ?? null,
+    total_ms: data.total_ms ?? null,
   }
 }

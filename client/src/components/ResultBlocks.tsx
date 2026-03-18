@@ -18,7 +18,7 @@ function getCombinedResult(
   const mseDefect = compareResult?.defect ?? null
   const patchcoreDefect =
     anomalibResult != null && !anomalibResult.error
-      ? anomalibResult.score >= anomalibResult.threshold
+      ? anomalibResult.defect
       : null
   const finalDefect = (mseDefect ?? false) || (patchcoreDefect ?? false)
   const note =
@@ -64,8 +64,17 @@ export function ResultBlocks({
                   <> · сырой = {Number(anomalibResult.raw_score).toFixed(2)}</>
                 )}{' '}
                 (порог {anomalibResult.threshold} →{' '}
-                {anomalibResult.score >= anomalibResult.threshold ? 'брак' : 'норма'})
+                {anomalibResult.defect ? 'брак' : 'норма'})
               </p>
+              {(anomalibResult.nn_inference_ms != null || anomalibResult.total_ms != null) && (
+                <p className="result-block__mse">
+                  Время Patchcore: нейронка {anomalibResult.nn_inference_ms ?? '—'} мс
+                  {anomalibResult.postprocess_ms != null && (
+                    <> · постобработка {anomalibResult.postprocess_ms} мс</>
+                  )}
+                  {anomalibResult.total_ms != null && <> · всего {anomalibResult.total_ms} мс</>}
+                </p>
+              )}
               {anomalibResult.message && (
                 <p className="result-block__message">{anomalibResult.message}</p>
               )}
@@ -95,6 +104,9 @@ export function ResultBlocks({
           <p className="result-block__mse">
             MSE = {compareResult.mse.toFixed(1)} (порог {compareResult.threshold})
           </p>
+          {compareResult.algo_ms != null && (
+            <p className="result-block__mse">Время алгоритма (MSE): {compareResult.algo_ms} мс</p>
+          )}
           {testImageUrl && compareResult.matchPosition && (
             <DefectHighlight
               testImageUrl={testImageUrl}
@@ -107,12 +119,12 @@ export function ResultBlocks({
 
       {combined && (
         <div className="result-block result-block--combined">
-          <div className={`result ${combined.finalDefect ? 'result--defect' : 'result--ok'}`}>
+          {/* <div className={`result ${combined.finalDefect ? 'result--ok' : 'result--defect'}`}>
             <span className="result__label">Совмещённый вывод:</span>
             <span className="result__value">
-              {combined.finalDefect ? 'Брак' : 'Нет брака'}
+              {combined.finalDefect ? 'норма' : 'брак'}
             </span>
-          </div>
+          </div> */}
           <p className="result-block__mse">
             MSE →{' '}
             {combined.mseDefect == null ? 'нет данных' : combined.mseDefect ? 'брак' : 'норма'}
@@ -120,12 +132,12 @@ export function ResultBlocks({
             {combined.patchcoreDefect == null
               ? 'нет данных'
               : combined.patchcoreDefect
-                ? 'брак'
-                : 'норма'}
+                ? 'норма'
+                : 'брак'}
           </p>
-          {combined.note && (
+          {/* {combined.note && (
             <p className="result-block__message">{combined.note}</p>
-          )}
+          )} */}
         </div>
       )}
     </>

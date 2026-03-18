@@ -309,6 +309,8 @@ export interface CompareResult {
   diffMap: Uint8Array | null
   smoothMap: Uint8Array | null
   ignoreDiffUsed: number
+  /** время выполнения алгоритма сравнения на клиенте (мс) */
+  algo_ms?: number
 }
 
 /**

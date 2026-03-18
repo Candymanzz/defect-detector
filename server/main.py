@@ -16,6 +16,7 @@ import logging
 import math
 import os
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -86,6 +87,7 @@ PATCHCORE_NUM_NEIGHBORS = 15   # K ближайших соседей при ср
 # Результаты обучения и калибровки
 RESULTS_DIR = Path("./results/patchcore_bucket_labels").resolve()
 CALIBRATION_BOUNDS_FILE = "calibration_bounds.json"
+CALIBRATION_STATS_FILE = "calibration_stats.json"
 
 # Мягкая нормализация score без калибровки: score = 1 - exp(-raw / K). Чем больше K, тем медленнее рост.
 # K=14: нормальные кадры (raw ~8) дают score ~0.44, брак (raw 20+) — 0.76+; при пороге 0.5–0.62 меньше ложных срабатываний.
@@ -109,6 +111,21 @@ def _load_calibration_bounds() -> tuple[float, float] | None:
         return (float(lo), float(hi))
     except Exception as e:
         logger.warning("Не удалось загрузить границы калибровки из %s: %s", path, e)
+        return None
+
+
+def _load_calibration_stats() -> dict | None:
+    """
+    Загружает агрегированную статистику калибровки (normal_stats/abnormal_stats) из calibration_stats.json,
+    если файл был сохранён эндпоинтом /api/patchcore/calibrate.
+    """
+    path = RESULTS_DIR / CALIBRATION_STATS_FILE
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning("Не удалось загрузить статистику калибровки из %s: %s", path, e)
         return None
 
 
@@ -142,6 +159,9 @@ class PatchcoreResult(BaseModel):
     heatmap_base64: str | None = None
     message: str | None = None
     raw_score: float | None = None
+    nn_inference_ms: float | None = None
+    postprocess_ms: float | None = None
+    total_ms: float | None = None
 
 
 class CalibrationSample(BaseModel):
@@ -558,6 +578,53 @@ def _overlay_heatmap_base64(image: np.ndarray, anomaly_map: np.ndarray | None) -
 
 
 # =============================================================================
+# ОТЛАДОЧНОЕ ЛОГИРОВАНИЕ ПО МАКСИМУМАМ anomaly_map
+# =============================================================================
+
+
+def _log_top_anomaly_pixels(anomaly_map: np.ndarray, label: str, top_k: int = 5) -> None:
+    """
+    Логируем несколько самых «аномальных» пикселей карты:
+    - значение аномалии
+    - координаты (y, x)
+    - нормированные координаты (относительно высоты/ширины)
+
+    Это помогает понять, где именно карта даёт максимальные значения
+    и чем отличаются две «почти одинаковые» картинки с разными score.
+    """
+    try:
+        arr = anomaly_map
+        if hasattr(arr, "detach"):
+            arr = arr.detach().cpu().numpy()
+        arr = np.asarray(arr)
+        if arr.ndim == 4:
+            arr = arr[0]
+        if arr.ndim == 3:
+            arr = arr.squeeze()
+        if arr.ndim != 2 or not arr.size:
+            return
+
+        h, w = arr.shape
+        flat = arr.reshape(-1)
+        k = min(top_k, flat.size)
+        # Индексы top-k максимумов (от большего к меньшему)
+        top_idx = np.argpartition(-flat, np.arange(k))[:k]
+        top_idx = top_idx[np.argsort(-flat[top_idx])]
+
+        entries = []
+        for idx in top_idx:
+            y, x = divmod(int(idx), w)
+            val = float(flat[idx])
+            entries.append(
+                f"(val={val:.4f}, y={y}, x={x}, y_norm={y / (h - 1):.3f}, x_norm={x / (w - 1):.3f})"
+            )
+
+        logger.info("%s: top-%d anomaly pixels: %s", label, k, "; ".join(entries))
+    except Exception as e:
+        logger.debug("Не удалось залогировать top anomaly pixels для %s: %s", label, e)
+
+
+# =============================================================================
 # ИЗВЛЕЧЕНИЕ И НОРМАЛИЗАЦИЯ СКОРА (сырой raw → score 0–1)
 # =============================================================================
 
@@ -580,7 +647,7 @@ def _extract_raw_score_from_predictions(predictions) -> tuple[float, str]:
         if am.size:
             am_max = float(np.max(am))
             am_std = float(np.std(am))
-            raw = (am_max / 10.0) if am_max > 2.0 else (am_max * 10.0)
+            raw = am_max
             if am_std < 1e-6:
                 logger.error(
                     "anomaly_map имеет нулевую дисперсию (std=%.6f). Возможна проблема инициализации весов или несоответствие размеров.",
@@ -595,7 +662,7 @@ def _extract_raw_score_from_predictions(predictions) -> tuple[float, str]:
                         ps_val = float(t.flatten()[0].item()) if t.numel() else 0.0
                     else:
                         ps_val = float(score_val)
-                    raw = (ps_val / 10.0) if ps_val > 2.0 else (ps_val * 10.0)
+                    raw = ps_val
                     raw_source = "pred_score"
                     logger.warning(
                         "anomaly_map постоянна, pred_score=%.4f -> raw=%.4f. Возможно старый .pt (layer2+layer3) — переобучите.",
@@ -627,7 +694,25 @@ def _normalize_score_for_response(raw: float) -> float:
             "Не найдены границы калибровки raw_score (calibration_bounds.json). "
             "Перед использованием инференса необходимо вызвать /api/patchcore/calibrate."
         )
-    return _min_max_normalize(raw, bounds[0], bounds[1])
+    score = _min_max_normalize(raw, bounds[0], bounds[1])
+
+    # Дополнительная валидация калибровки: если после неё средний score нормальных образцов
+    # выше среднего score аномальных, это означает инверсию распределений.
+    stats = _load_calibration_stats()
+    if stats is not None:
+        normal_stats = stats.get("normal_stats") or {}
+        abnormal_stats = stats.get("abnormal_stats") or {}
+        n_mean = normal_stats.get("mean")
+        a_mean = abnormal_stats.get("mean")
+        if isinstance(n_mean, (int, float)) and isinstance(a_mean, (int, float)) and n_mean > a_mean:
+            logger.critical(
+                "Dataset Inversion Detected: mean(normal)=%.4f > mean(abnormal)=%.4f. "
+                "Проверьте, что normal/abnormal разложены корректно и логика score соответствует задаче.",
+                float(n_mean),
+                float(a_mean),
+            )
+
+    return score
 
 
 def _extract_adaptive_threshold_from_predictions(predictions) -> float | None:
@@ -730,6 +815,8 @@ async def analyze_patchcore(
     if not test_bytes:
         raise HTTPException(status_code=400, detail="Пустой файл изображения test")
 
+    t_total_start = time.perf_counter()
+
     # Загружаем/обучаем модель по необходимости
     try:
         ensure_trained_model()  # гарантируем, что есть хотя бы .pt или только что обучили
@@ -760,6 +847,8 @@ async def analyze_patchcore(
     lightning_ckpt = _find_latest_lightning_ckpt()
     predictions = None
     used_engine_predict = False
+
+    t_nn_start = time.perf_counter()
 
     if lightning_ckpt is not None:
         try:
@@ -804,6 +893,8 @@ async def analyze_patchcore(
             logger.exception("Ошибка инференса Patchcore")
             raise HTTPException(status_code=500, detail=f"Ошибка инференса Patchcore: {e!s}")
 
+    t_nn_end = time.perf_counter()
+
     try:
         tmp_path.unlink(missing_ok=True)
     except Exception:
@@ -811,6 +902,8 @@ async def analyze_patchcore(
 
     # Разбор предсказания: image и anomaly_map для heatmap; raw/score через общие функции
     try:
+        t_post_start = time.perf_counter()
+
         logger.info("predictions type=%s", type(predictions).__name__)
         if isinstance(predictions, dict):
             logger.info("predictions keys=%s", list(predictions.keys()))
@@ -830,6 +923,8 @@ async def analyze_patchcore(
                 float(np.mean(am_flat)),
                 am_std,
             )
+            # Дополнительный отладочный лог: несколько максимумов карты с координатами.
+            _log_top_anomaly_pixels(am_debug, label="analyze_patchcore.anomaly_map", top_k=5)
             if am_std < 1e-6:
                 logger.error(
                     "anomaly_map из инференса имеет нулевую дисперсию (std=%.6f). "
@@ -874,6 +969,9 @@ async def analyze_patchcore(
 
     heatmap_b64 = _overlay_heatmap_base64(img_vis, anomaly_map)
 
+    t_post_end = time.perf_counter()
+    t_total_end = time.perf_counter()
+
     return PatchcoreResult(
         defect=defect,
         score=round(score, 4),
@@ -881,6 +979,9 @@ async def analyze_patchcore(
         heatmap_base64=heatmap_b64,
         message=None,
         raw_score=round(raw, 4),
+        nn_inference_ms=round((t_nn_end - t_nn_start) * 1000.0, 2),
+        postprocess_ms=round((t_post_end - t_post_start) * 1000.0, 2),
+        total_ms=round((t_total_end - t_total_start) * 1000.0, 2),
     )
 
 
@@ -915,18 +1016,8 @@ def _compute_raw_from_anomaly_map(anomaly_map: np.ndarray | None) -> float:
     if not arr.size:
         return 0.0
 
-    max_val = float(np.max(arr))
-    std_val = float(np.std(arr))
-    if std_val < 1e-6:
-        logger.error(
-            "Калибровка: anomaly_map имеет нулевую дисперсию (std=%.6f). "
-            "Возможна проблема с конфигурацией Patchcore или трансформациями Resize/CenterCrop.",
-            std_val,
-        )
-
-    # Сырые значения от model.model() для Patchcore — в районе 50–100; от Engine — в [0,1].
-    raw = (max_val / 10.0) if max_val > 2.0 else (max_val * 10.0)
-    return raw
+    # Возвращаем чистое пиковое значение без дополнительного масштабирования.
+    return float(np.max(arr))
 
 
 @app.get("/api/patchcore/calibrate", response_model=CalibrationResult)
@@ -1013,6 +1104,22 @@ def calibrate_patchcore(limit_per_class: int = 0):
 
     normal_stats = _stats(normal_scores)
     abnormal_stats = _stats(abnormal_scores)
+
+    # Сохраняем сводную статистику калибровки для последующих проверок в _normalize_score_for_response.
+    stats_path = RESULTS_DIR / CALIBRATION_STATS_FILE
+    try:
+        stats_path.write_text(
+            json.dumps(
+                {
+                    "normal_stats": normal_stats,
+                    "abnormal_stats": abnormal_stats,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        logger.warning("Не удалось сохранить статистику калибровки в %s: %s", stats_path, e)
 
     t_low: float | None = None
     t_high: float | None = None

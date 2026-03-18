@@ -63,8 +63,8 @@ function App() {
     const refImg = new Image()
     const testImg = new Image()
     const run = () => {
-      setCompareResult(
-        compareWithReference(
+      const t0 = performance.now()
+      const result = compareWithReference(
           refImg,
           testImg,
           contourPoints,
@@ -72,7 +72,8 @@ function App() {
           defectThresholdMse,
           ignoreDiffThreshold
         )
-      )
+      const t1 = performance.now()
+      setCompareResult({ ...result, algo_ms: Math.round((t1 - t0) * 100) / 100 })
       setMseRunning(false)
     }
     testImg.onload = run
